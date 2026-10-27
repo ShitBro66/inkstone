@@ -27,6 +27,7 @@ import { broadcastCursor, scheduleFtsDrain } from '../lib/notify'
 import { assertContentSize, clampInt, JSON_BODY_LIMITS, readJson } from '../lib/request'
 import { requireAuth } from '../middleware/auth'
 import { aiDeleteNeededSql, enqueueNoteIndex, noteIndexQueueStatement } from '../mcp/ai-search'
+import { folderRestoreStatements } from '../db/folder-trash'
 
 export const notesRoutes = new Hono<AppBindings>()
 
@@ -182,7 +183,6 @@ notesRoutes.post('/trash/empty', async (c) => {
     .bind(userId)
     .first<{ count: number }>()
   let purged = 0
-  let deletionCursor: number | undefined
 
   if ((row?.count ?? 0) > 0) {
     const trashed = `SELECT id FROM notes WHERE user_id = ?1 AND deleted_at IS NOT NULL`
@@ -238,13 +238,21 @@ notesRoutes.post('/trash/empty', async (c) => {
         .bind(userId),
     )
     const results = await c.env.DB.batch(statements)
-    const changeResult = results.at(-2) as D1Result<{ seq: number }> | undefined
     purged = results.at(-1)?.meta.changes ?? 0
-    deletionCursor = changeResult?.results?.at(-1)?.seq
     if (purged) scheduleFtsDrain(c)
   }
+  const clearedAt = Date.now()
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      `INSERT INTO changes (user_id, entity, entity_id, op, at)
+       SELECT ?1, 'folder', id, 'delete', ?2 FROM folders
+       WHERE user_id = ?1 AND deleted_at IS NOT NULL`,
+    ).bind(userId, clearedAt),
+    c.env.DB.prepare(`DELETE FROM folder_trash_groups WHERE user_id = ?1`).bind(userId),
+    c.env.DB.prepare(`DELETE FROM folders WHERE user_id = ?1 AND deleted_at IS NOT NULL`).bind(userId),
+  ])
   await pruneOrphanTags(c.env.DB, userId)
-  await broadcastCursor(c, deletionCursor)
+  await broadcastCursor(c)
   return c.json({ purged })
 })
 
@@ -633,6 +641,8 @@ notesRoutes.post('/:id/restore', async (c) => {
 
   const now = Math.max(Date.now(), row.updated_at + 1)
   const nextRev = row.rev + 1
+  let folderStatements: D1PreparedStatement[] = []
+  if (row.folder_id) folderStatements = await folderRestoreStatements(c.env.DB, userId, [row.folder_id], now)
   const update = c.env.DB.prepare(
     `UPDATE notes SET deleted_at = NULL, updated_at = ?1, rev = ?2
       WHERE id = ?3 AND user_id = ?4 AND rev = ?5 AND deleted_at IS NOT NULL`,
@@ -655,7 +665,7 @@ notesRoutes.post('/:id/restore', async (c) => {
      SELECT ?1, 'note', ?2, 'upsert', ?3
       WHERE EXISTS (SELECT 1 FROM notes WHERE id = ?2 AND user_id = ?1 AND rev = ?4 AND deleted_at IS NULL)`,
   ).bind(userId, id, now, nextRev)
-  const [updated] = await c.env.DB.batch([update, ...derived, change])
+  const [updated] = await c.env.DB.batch([update, ...derived, change, ...folderStatements])
   if (!updated?.meta.changes) {
     throw ApiError.conflict('This note was modified elsewhere', { server: await loadNote(c.env.DB, userId, id) })
   }

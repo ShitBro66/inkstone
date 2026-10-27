@@ -1,4 +1,6 @@
 import { LIMITS } from './constants'
+import { parseFolderTrashBackup } from './folder-trash'
+import type { FolderTrashBackup } from './types'
 
 export const MARKDOWN_BACKUP_FORMAT = 'inkstone-markdown-backup'
 export const MARKDOWN_BACKUP_VERSION = 3 as const
@@ -13,6 +15,7 @@ export interface MarkdownBackupNoteEntry {
   path: string
   title: string
   folder: string[]
+  folderId?: string | null
   attachmentHashes: string[]
   state: MarkdownBackupNoteState
   archived: boolean
@@ -40,6 +43,7 @@ export interface MarkdownBackupManifest {
   snapshot: string
   notes: MarkdownBackupNoteEntry[]
   attachments: MarkdownBackupAttachmentEntry[]
+  folderTrash?: FolderTrashBackup
 }
 
 const HASH_RE = /^[0-9a-f]{64}$/
@@ -136,12 +140,14 @@ export function parseMarkdownBackupManifest(value: unknown): MarkdownBackupManif
     if (raw.state !== 'trash' && raw.deletedAt !== null) return null
 
     noteIds.add(raw.id)
+    if (raw.folderId !== undefined && raw.folderId !== null && (typeof raw.folderId !== 'string' || !NOTE_ID_RE.test(raw.folderId))) return null
     paths.add(raw.path.toLowerCase())
     notes.push({
       id: raw.id,
       path: raw.path,
       title: raw.title,
       folder: raw.folder as string[],
+      ...(raw.folderId !== undefined ? { folderId: raw.folderId as string | null } : {}),
       attachmentHashes: raw.attachmentHashes as string[],
       state: raw.state,
       archived: raw.archived,
@@ -182,7 +188,7 @@ export function parseMarkdownBackupManifest(value: unknown): MarkdownBackupManif
   }
   if (notes.some((note) => note.attachmentHashes.some((hash) => !hashes.has(hash)))) return null
 
-  return {
+  const manifest: MarkdownBackupManifest = {
     format: MARKDOWN_BACKUP_FORMAT,
     version: value.version,
     appVersion: value.appVersion,
@@ -191,6 +197,12 @@ export function parseMarkdownBackupManifest(value: unknown): MarkdownBackupManif
     notes,
     attachments,
   }
+  if (value.folderTrash !== undefined) {
+    const trash = parseFolderTrashBackup(value.folderTrash)
+    if (!trash) return null
+    manifest.folderTrash = trash
+  }
+  return manifest
 }
 
 export function isSafeBackupPath(value: unknown): value is string {

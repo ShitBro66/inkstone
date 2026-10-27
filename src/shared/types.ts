@@ -188,6 +188,33 @@ export interface Tag {
   createdAt: number
 }
 
+export interface FolderTrashGroup {
+  id: string
+  rootFolder: Folder
+  deletedAt: number
+  folderCount: number
+  noteIds: string[]
+}
+
+export interface FolderTrashLink {
+  sourceNoteId: string
+  targetKey: string
+  targetTitle: string
+  targetNoteId: string | null
+}
+
+export interface FolderTrashBackup {
+  folders: (Folder & { deletedAt: number | null })[]
+  groups: {
+    id: string
+    rootFolderId: string
+    deletedAt: number
+    folderIds: string[]
+    noteIds: string[]
+    links: FolderTrashLink[]
+  }[]
+}
+
 export interface NoteVersionMeta {
   id: string
   noteId: string
@@ -494,6 +521,7 @@ export interface ExportBundle {
   exportedAt: number
   user: { login: string; name: string }
   folders: Folder[]
+  folderTrash?: FolderTrashBackup
   tags: Tag[]
   notes: Note[]
 

@@ -10,6 +10,7 @@ import type {
   BackupTargetPatchInput,
   Backlink,
   Folder,
+  FolderTrashGroup,
   GraphResponse,
   ImportResult,
   ListNotesResponse,
@@ -360,6 +361,8 @@ export const api = {
 
   folders: {
     list: () => request<{ folders: Folder[] }>('/api/folders'),
+    trash: () => request<{ groups: FolderTrashGroup[] }>('/api/folders/trash'),
+    restoreTrash: (id: string) => request<{ ok: true }>(`/api/folders/trash/${id}/restore`, { method: 'POST' }),
     create: (body: { id?: string; name?: string; parentId?: string | null; icon?: string | null; color?: string | null }) =>
       request<Folder>('/api/folders', { method: 'POST', body }),
     patch: (id: string, body: {

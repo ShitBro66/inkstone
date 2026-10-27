@@ -12,6 +12,17 @@ const BACKUP_ARCHIVES_TABLE = `CREATE TABLE IF NOT EXISTS backup_archives (
 )`
 const BACKUP_ARCHIVES_INDEX = `CREATE INDEX IF NOT EXISTS idx_backup_archives_retention
   ON backup_archives(user_id, target_id, destination, created_at DESC, archive_path DESC)`
+const FOLDER_TRASH_SCHEMA = `CREATE TABLE IF NOT EXISTS folder_trash_groups (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  root_folder_id TEXT NOT NULL,
+  deleted_at INTEGER NOT NULL,
+  folder_ids_json TEXT NOT NULL,
+  note_ids_json TEXT NOT NULL,
+  links_json TEXT NOT NULL
+)`
+const FOLDER_TRASH_INDEX = `CREATE INDEX IF NOT EXISTS idx_folder_trash_user
+  ON folder_trash_groups(user_id, deleted_at DESC)`
 
 export const SCHEMA_STATEMENTS: readonly string[] = [
   `CREATE TABLE IF NOT EXISTS app_meta (
@@ -52,6 +63,9 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
   `CREATE INDEX IF NOT EXISTS idx_folders_user ON folders(user_id, parent_id, position)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_unique_sibling
      ON folders(user_id, IFNULL(parent_id, ''), lower(name)) WHERE deleted_at IS NULL`,
+
+  FOLDER_TRASH_SCHEMA,
+  FOLDER_TRASH_INDEX,
 
   `CREATE TABLE IF NOT EXISTS notes (
     id TEXT PRIMARY KEY,
@@ -537,6 +551,10 @@ const SCHEMA_MIGRATIONS: readonly SchemaMigration[] = [
     version: 13,
     statements: [BACKUP_ARCHIVES_TABLE, BACKUP_ARCHIVES_INDEX],
   },
+  {
+    version: 14,
+    statements: [FOLDER_TRASH_SCHEMA, FOLDER_TRASH_INDEX],
+  },
 ]
 
 const FTS_STATEMENT = `CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
@@ -561,6 +579,7 @@ const REQUIRED_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   schema_migrations: ['version', 'applied_at'],
   users: ['id', 'username', 'password_hash', 'login', 'name', 'avatar_url', 'role', 'settings', 'created_at', 'last_seen_at'],
   folders: ['id', 'user_id', 'parent_id', 'name', 'icon', 'color', 'position', 'created_at', 'updated_at', 'deleted_at'],
+  folder_trash_groups: ['id', 'user_id', 'root_folder_id', 'deleted_at', 'folder_ids_json', 'note_ids_json', 'links_json'],
   notes: ['id', 'user_id', 'folder_id', 'title', 'title_key', 'content', 'excerpt', 'rev', 'word_count', 'char_count', 'is_pinned', 'is_starred', 'is_archived', 'position', 'content_hash', 'created_at', 'updated_at', 'deleted_at'],
   tags: ['id', 'user_id', 'name', 'color', 'is_manual', 'created_at'],
   note_tags: ['note_id', 'tag_id'],
@@ -593,6 +612,7 @@ const REQUIRED_TABLES = [
   'schema_migrations',
   'users',
   'folders',
+  'folder_trash_groups',
   'notes',
   'tags',
   'note_tags',
@@ -622,6 +642,7 @@ const REQUIRED_TABLES = [
 
 const REQUIRED_INDEXES = [
   'idx_folders_user',
+  'idx_folder_trash_user',
   'idx_folders_unique_sibling',
   'idx_notes_user_updated',
   'idx_notes_folder',

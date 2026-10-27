@@ -422,6 +422,7 @@ function FolderRow({ node, notesByFolder, mobile, canOpenToSide, siblings, index
     const folders = useNotes((s) => s.folders ?? []);
     const patchFolder = useNotes((s) => s.patchFolder);
     const deleteFolder = useNotes((s) => s.deleteFolder);
+    const trashFolder = useNotes((s) => s.trashFolder);
     const patchNote = useNotes((s) => s.patchNote);
     const directNoteCount = useNotes((s) => Object.values(s.notes ?? {}).filter((note) => note.folderId === node.id).length);
     const [dropState, setDropState] = useDropState<'none' | 'before' | 'inside' | 'after'>('none');
@@ -488,6 +489,26 @@ function FolderRow({ node, notesByFolder, mobile, canOpenToSide, siblings, index
             removingRef.current = false;
         }
     };
+    const removeContents = async () => {
+        if (removingRef.current)
+            return;
+        removingRef.current = true;
+        try {
+            const state = useNotes.getState();
+            const ids = folderDescendantIds(state.folders, node.id);
+            const notes = Object.values(state.notes).filter((note) => note.folderId !== null && ids.has(note.folderId) && note.deletedAt === null);
+            const ok = await confirm({
+                title: t("folders.delete_with_contents_title", { name: node.name }),
+                description: t("folders.delete_with_contents_description", { folders: ids.size, notes: notes.length }),
+                confirmLabel: t("common.move_to_trash"),
+                tone: 'danger',
+            });
+            if (ok) await trashFolder(node.id);
+        }
+        finally {
+            removingRef.current = false;
+        }
+    };
     const moveEarlier = () => {
         const previous = siblings[index - 1];
         if (previous)
@@ -520,6 +541,7 @@ function FolderRow({ node, notesByFolder, mobile, canOpenToSide, siblings, index
         { id: 'move-later', label: t("sidebar.move_later"), icon: <ArrowDown size={13}/>, disabled: index === siblings.length - 1, onSelect: moveLater },
         { id: 'move-out', label: t("sidebar.move_out_one_level"), icon: <CornerUpLeft size={13}/>, disabled: !parentNode, onSelect: moveOut },
         { id: 'delete', label: t("sidebar.delete_folder"), icon: <Trash2 size={13}/>, tone: 'danger', separatorBefore: true, onSelect: () => void remove() },
+        { id: 'delete-contents', label: t("folders.delete_with_contents"), icon: <Trash2 size={13}/>, tone: 'danger', onSelect: () => void removeContents() },
     ];
     return (<div role="treeitem" aria-level={node.depth + 1} aria-expanded={hasChildren ? expanded : undefined} className={cn(justCreated && 'anim-tree-item-enter')} data-new-folder={justCreated || undefined}>
       <div ref={buttonRef} data-folder-drop-target onContextMenu={(event) => {

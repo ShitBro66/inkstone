@@ -14,6 +14,7 @@ import { assertContentSize } from '../lib/request'
 import { enqueueNoteIndex } from './ai-search'
 import { runIdempotent } from './operations'
 import { buildOutline } from './retrieval'
+import { folderRestoreStatements } from '../db/folder-trash'
 
 export type NoteEditOperation = 'replace' | 'replace_section' | 'append' | 'prepend' | 'replace_all'
 
@@ -234,6 +235,8 @@ export async function restoreMcpNote(
       if (row.deleted_at === null) throw ApiError.badRequest('The note is not in the trash')
       const now = Math.max(Date.now(), row.updated_at + 1)
       const nextRev = row.rev + 1
+      let folderStatements: D1PreparedStatement[] = []
+      if (row.folder_id) folderStatements = await folderRestoreStatements(context.env.DB, context.userId, [row.folder_id], now)
       const update = context.env.DB.prepare(
         `UPDATE notes SET deleted_at = NULL, updated_at = ?1, rev = ?2
           WHERE id = ?3 AND user_id = ?4 AND rev = ?5 AND deleted_at IS NOT NULL`,
@@ -256,7 +259,7 @@ export async function restoreMcpNote(
           WHERE EXISTS (SELECT 1 FROM notes
             WHERE id = ?2 AND user_id = ?1 AND rev = ?4 AND deleted_at IS NULL)`,
       ).bind(context.userId, row.id, now, nextRev)
-      const [updated] = await context.env.DB.batch([update, ...derived, change])
+      const [updated] = await context.env.DB.batch([update, ...derived, change, ...folderStatements])
       if (!updated?.meta.changes) {
         throw ApiError.conflict('This note was modified elsewhere', {
           server: await loadNote(context.env.DB, context.userId, row.id),

@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { APP_VERSION, LIMITS, mergeSettingsPatch } from '@shared/constants'
-import { duplicateNoteTitle, utf8ByteLength } from '@shared/text-utils'
+import { duplicateNoteTitle, truncateText, utf8ByteLength } from '@shared/text-utils'
 import { organizerColorOrNull } from '@shared/organizer-colors'
 import {
   deriveExcerpt,
@@ -21,6 +21,7 @@ import type {
   ExportAttachment,
   ExportBundle,
   Folder,
+  FolderTrashGroup,
   GraphResponse,
   ImportResult,
   McpSettingsInfo,
@@ -51,6 +52,24 @@ interface DemoBackend {
 export function createDemoBackend(): DemoBackend {
   const state = createDemoState()
   const app = new Hono()
+  const trashedFolders = new Map<string, Folder & { deletedAt: number }>()
+  const folderTrash = new Map<string, FolderTrashGroup & { folderIds: string[] }>()
+  const restoreFolder = (id: string): boolean => {
+    if (state.folders.has(id)) return true
+    const saved = trashedFolders.get(id)
+    if (!saved) return false
+    if (saved.parentId !== null && !restoreFolder(saved.parentId)) return false
+    const siblings = [...state.folders.values()].filter((folder) => folder.parentId === saved.parentId)
+    let name = saved.name
+    for (let suffix = 2; siblings.some((folder) => folder.name.toLowerCase() === name.toLowerCase()); suffix++) {
+      const ending = ` (${suffix})`
+      name = truncateText(saved.name, LIMITS.folderNameMaxLength - ending.length) + ending
+    }
+    const { deletedAt: _deletedAt, ...folder } = saved
+    state.folders.set(id, { ...folder, name, updatedAt: Date.now() })
+    trashedFolders.delete(id)
+    return true
+  }
 
   app.use('/api/*', async (c, next) => {
     const path = c.req.path
@@ -206,6 +225,9 @@ export function createDemoBackend(): DemoBackend {
   app.post('/api/notes/trash/empty', (c) => {
     const ids = [...state.notes.values()].filter((note) => note.deletedAt !== null).map((note) => note.id)
     for (const id of ids) purgeNote(state, id)
+    trashedFolders.clear()
+    folderTrash.clear()
+    state.cursor++
     return c.json({ purged: ids.length })
   })
   app.get('/api/notes/:id/versions', (c) => {
@@ -243,6 +265,7 @@ export function createDemoBackend(): DemoBackend {
   app.post('/api/notes/:id/restore', (c) => {
     const note = state.notes.get(c.req.param('id'))
     if (!note) return apiError(404, 'not_found', 'Note not found')
+    if (note.folderId !== null && !restoreFolder(note.folderId)) return apiError(409, 'conflict', 'The original parent folder no longer exists')
     const restored = { ...note, deletedAt: null, updatedAt: Date.now(), rev: note.rev + 1 }
     state.notes.set(note.id, restored)
     state.cursor++
@@ -329,6 +352,26 @@ export function createDemoBackend(): DemoBackend {
     return c.json(removed)
   })
 
+  app.get('/api/folders/trash', (c) => c.json({ groups: [...folderTrash.values()].map((group) => ({
+    id: group.id, rootFolder: state.folders.get(group.rootFolder.id) ?? group.rootFolder,
+    deletedAt: group.deletedAt,
+    folderCount: group.folderIds.filter((id) => trashedFolders.get(id)?.deletedAt === group.deletedAt).length,
+    noteIds: group.noteIds.filter((id) => state.notes.get(id)?.deletedAt === group.deletedAt),
+  })).filter((group) => group.folderCount > 0 || group.noteIds.length > 0) }))
+  app.post('/api/folders/trash/:id/restore', (c) => {
+    const group = folderTrash.get(c.req.param('id'))
+    if (!group) return apiError(404, 'not_found', 'Folder trash group not found')
+    for (const id of group.folderIds) {
+      if (!restoreFolder(id)) return apiError(409, 'conflict', 'The original parent folder no longer exists')
+    }
+    for (const id of group.noteIds) {
+      const note = state.notes.get(id)
+      if (note?.deletedAt === group.deletedAt) state.notes.set(id, { ...note, deletedAt: null, rev: note.rev + 1, updatedAt: Date.now() })
+    }
+    folderTrash.delete(group.id)
+    state.cursor++
+    return c.json({ ok: true as const })
+  })
   app.get('/api/folders', (c) => c.json({ folders: listFolders(state) }))
   app.post('/api/folders', async (c) => {
     const body = await jsonBody(c.req.raw)
@@ -443,17 +486,25 @@ export function createDemoBackend(): DemoBackend {
     const descendants = folderDescendants(state, root.id)
     if (strategy === 'delete') {
       const now = Date.now()
+      const noteIds: string[] = []
       for (const note of state.notes.values()) {
-        if (descendants.has(note.folderId ?? '')) {
-          state.notes.set(note.id, { ...note, folderId: null, deletedAt: now, updatedAt: now, rev: note.rev + 1 })
+        if (note.deletedAt === null && descendants.has(note.folderId ?? '')) {
+          noteIds.push(note.id)
+          state.notes.set(note.id, { ...note, deletedAt: now, updatedAt: now, rev: note.rev + 1 })
         }
       }
-      for (const id of descendants) state.folders.delete(id)
+      for (const id of descendants) {
+        trashedFolders.set(id, { ...state.folders.get(id)!, deletedAt: now })
+        state.folders.delete(id)
+      }
+      const id = newDemoId()
+      folderTrash.set(id, { id, rootFolder: root, deletedAt: now, folderIds: [...descendants], folderCount: descendants.size, noteIds })
     } else {
       promoteDemoFolderChildren(state, root)
       for (const note of state.notes.values()) {
         if (note.folderId === root.id) state.notes.set(note.id, { ...note, folderId: root.parentId })
       }
+      trashedFolders.set(root.id, { ...root, deletedAt: Date.now() })
       state.folders.delete(root.id)
     }
     state.cursor++

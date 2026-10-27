@@ -19,6 +19,7 @@ import { folderPathLabel } from '../../lib/folders';
 import { FolderPicker } from '../folders/FolderPicker';
 import { t, useLocale, type MessageKey } from "../../lib/i18n";
 import { MobileLibraryFilters } from '../shell/MobileLibraryFilters';
+import { FolderTrashGroups } from './FolderTrashGroups';
 const VIEW_MESSAGE_KEYS: Record<ViewKind, MessageKey> = {
     all: 'navigation.all_notes',
     recent: 'navigation.recently_edited',
@@ -52,6 +53,9 @@ export function NoteList() {
     const notes = useVisibleNotes();
     const allNotes = useNotes((s) => s.notes);
     const contents = useNotes((s) => s.contents);
+    const folderTrash = useNotes((s) => s.folderTrash);
+    const refreshFolderTrash = useNotes((s) => s.refreshFolderTrash);
+    const cursor = useNotes((s) => s.cursor);
     const folders = useNotes((s) => s.folders);
     const tags = useNotes((s) => s.tags);
     const loading = useNotes((s) => s.loading);
@@ -88,6 +92,12 @@ export function NoteList() {
         });
         return () => controller.abort();
     }, [searchList, debouncedFilter]);
+    useEffect(() => {
+        if (view === 'trash') void refreshFolderTrash().catch(() => {});
+    }, [view, cursor, refreshFolderTrash]);
+    const groupedNoteIds = useMemo(() => new Set(folderTrash.flatMap((group) => group.noteIds)), [folderTrash]);
+    const visibleFolderTrash = useMemo(() => deferredFilter.trim() ? fuzzyFilter(folderTrash, deferredFilter, (group) => group.rootFolder.name, 200).map((result) => result.item) : folderTrash, [folderTrash, deferredFilter]);
+    const listNotes = useMemo(() => view === 'trash' && !deferredFilter.trim() ? notes.filter((note) => !groupedNoteIds.has(note.id)) : notes, [notes, view, groupedNoteIds, deferredFilter]);
     const title = useMemo(() => {
         if (searchList) return t('shell.search_all_notes');
         if (view === 'folder')
@@ -98,8 +108,8 @@ export function NoteList() {
     }, [view, folderId, tag, folders, locale, searchList]);
     const filtered = useMemo(() => {
         if (!deferredFilter.trim())
-            return notes.map((note) => ({ note, ranges: EMPTY_HIGHLIGHT }));
-        const local = fuzzyFilter(notes, deferredFilter, (n) => `${n.title} ${searchList ? contents[n.id] ?? n.excerpt : n.excerpt} ${n.tags.join(' ')}`, 200).map(({ item, match }) => ({
+            return listNotes.map((note) => ({ note, ranges: EMPTY_HIGHLIGHT }));
+        const local = fuzzyFilter(listNotes, deferredFilter, (n) => `${n.title} ${searchList ? contents[n.id] ?? n.excerpt : n.excerpt} ${n.tags.join(' ')}`, 200).map(({ item, match }) => ({
             note: item,
             ranges: match.ranges.filter(([s]) => s < item.title.length),
         }));
@@ -111,7 +121,7 @@ export function NoteList() {
             seen.add(note.id);
             return [{ note, ranges: EMPTY_HIGHLIGHT }];
         })];
-    }, [notes, deferredFilter, searchList, remote, allNotes, contents]);
+    }, [listNotes, deferredFilter, searchList, remote, allNotes, contents]);
     const filteredIds = useMemo(() => filtered.map((item) => item.note.id), [filtered]);
     const filteredPositions = useMemo(() => new Map(filteredIds.map((id, index) => [id, index + 1])), [filteredIds]);
     const filteredIdsRef = useRef(filteredIds);
@@ -303,11 +313,12 @@ export function NoteList() {
 
         {breakpoint === 'mobile' && <MobileLibraryFilters />}
 
-        {view === 'trash' && notes.length > 0 && (<button type="button" disabled={emptyingTrash} aria-busy={emptyingTrash} onClick={() => void emptyTrash()} className="mt-2 w-full rounded-[var(--r-md)] border border-[var(--border-subtle)] py-1.5 text-[11.5px] text-[var(--text-tertiary)] transition-colors hover:border-[var(--danger)] hover:text-[var(--danger)] disabled:pointer-events-none disabled:opacity-50">{t("notes.empty_trash")}{notes.length}{t("notes.notes_93aeb9")}</button>)}
+        {view === 'trash' && (notes.length > 0 || folderTrash.length > 0) && (<button type="button" disabled={emptyingTrash} aria-busy={emptyingTrash} onClick={() => void emptyTrash()} className="mt-2 w-full rounded-[var(--r-md)] border border-[var(--border-subtle)] py-1.5 text-[11.5px] text-[var(--text-tertiary)] transition-colors hover:border-[var(--danger)] hover:text-[var(--danger)] disabled:pointer-events-none disabled:opacity-50">{t("folders.empty_trash_summary", { notes: notes.length, groups: folderTrash.length })}</button>)}
       </header>
 
       <div key={`${view}:${folderId ?? ''}:${tag ?? ''}`} ref={listRef} data-note-list role="listbox" aria-label={title} aria-multiselectable="true" aria-activedescendant={activeNoteId && renderedIds.has(activeNoteId) ? `note-option-${activeNoteId}` : undefined} tabIndex={0} onKeyDown={onKeyDown} className="anim-view-content min-h-0 flex-1 overflow-y-auto px-2 pb-4 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--accent)]">
-        {!hydrated && loading ? (<NoteListSkeleton />) : filtered.length === 0 ? (<ListEmpty view={view} filtering={Boolean(filter)}/>) : (groups.map((group) => (<div key={group.key} role="group" aria-label={group.label ?? title}>
+        {view === 'trash' && visibleFolderTrash.length > 0 && <FolderTrashGroups groups={visibleFolderTrash} />}
+        {!hydrated && loading ? (<NoteListSkeleton />) : filtered.length === 0 ? (view === 'trash' && visibleFolderTrash.length > 0 ? null : <ListEmpty view={view} filtering={Boolean(filter)}/>) : (groups.map((group) => (<div key={group.key} role="group" aria-label={group.label ?? title}>
               {group.label && (<div className="px-2 pt-3 pb-1 text-[10.5px] font-semibold tracking-[0.06em] text-[var(--text-quaternary)]">
                   {group.label}
                 </div>)}
@@ -743,7 +754,7 @@ function useEmptyTrash() {
         try {
             const ok = await confirm({
                 title: t("common.empty_trash"),
-                description: t("notes.every_note_inside_will_be_permanently_deleted_and_cannot_be_recovered"),
+                description: t("folders.empty_trash_description"),
                 confirmLabel: t("common.clear"),
                 tone: 'danger',
             });

@@ -26,6 +26,7 @@ import { attachmentObjectKey } from '../attachments/keys'
 import { NOTE_COLUMNS_FULL, toFolder, toNote, toTag, type FolderRow, type NoteRow, type TagRow } from '../db/rows'
 import type { Env } from '../env'
 import { sha256Hex } from '../lib/encoding'
+import { exportFolderTrash } from '../db/folder-trash'
 import { ApiError } from '../lib/errors'
 import { safeAttachmentMime } from '../lib/image'
 
@@ -152,6 +153,7 @@ export async function buildSnapshot(env: Env, userId: string): Promise<Snapshot>
         path,
         title: note.title,
         folder: folderInfo?.names ?? [],
+        folderId: note.folderId,
         attachmentHashes,
         state,
         archived: note.isArchived,
@@ -219,6 +221,7 @@ export async function buildSnapshot(env: Env, userId: string): Promise<Snapshot>
     snapshot: stamp,
     notes: noteEntries,
     attachments: attachmentEntries,
+    folderTrash: await exportFolderTrash(env.DB, userId),
   }
   if (!parseMarkdownBackupManifest(manifest)) {
     throw new Error('The backup contains metadata that cannot be restored safely')
@@ -322,6 +325,7 @@ export async function buildJsonExport(env: Env, userId: string): Promise<Uint8Ar
     exportedAt: Date.now(),
     user: { login: user?.login ?? 'unknown', name: user?.name ?? '' },
     folders: (folderRows as D1Result<FolderRow>).results.map(toFolder),
+    folderTrash: await exportFolderTrash(env.DB, userId),
     tags: (tagRows as D1Result<TagRow>).results.map(toTag),
   }
   const chunks: Uint8Array[] = []

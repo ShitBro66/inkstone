@@ -58,6 +58,8 @@ import {
   type ObsidianAssetIndex,
 } from '../lib/obsidian-import'
 import { requireAuth } from '../middleware/auth'
+import { parseFolderTrashBackup } from '@shared/folder-trash'
+import { importFolderTrash } from '../db/folder-trash'
 
 export const transferRoutes = new Hono<AppBindings>()
 const EXPORT_FILE = 'inkstone-export.json'
@@ -400,6 +402,12 @@ async function importBackupFileBatch(
   manifest: MarkdownBackupManifest,
   ctx: ImportContext,
 ): Promise<void> {
+  const priorFolderIds = new Set<string>()
+  if (manifest.folderTrash) {
+    const existing = await c.env.DB.prepare(`SELECT id FROM folders WHERE user_id = ?1`).bind(userId).all<{ id: string }>()
+    for (const folder of existing.results) priorFolderIds.add(folder.id)
+  }
+  const noteIdMap = new Map<string, string>()
   const noteByPath = new Map(manifest.notes.map((entry) => [entry.path.toLowerCase(), entry]))
   const attachmentByPath = new Map(
     manifest.attachments.map((entry) => [entry.path.toLowerCase(), entry]),
@@ -448,7 +456,39 @@ async function importBackupFileBatch(
     } catch {
       throw new Error(`The Markdown file is not valid UTF-8: ${entry.path}`)
     }
-    await importBackupMarkdown(c, userId, entry, text, manifest, ctx)
+    const importedId = await importBackupMarkdown(c, userId, entry, text, manifest, ctx)
+    if (importedId) noteIdMap.set(entry.id, importedId)
+  }
+  if (manifest.folderTrash) {
+    const folderIdMap = new Map<string, string>()
+    const noteFolders = new Map(manifest.notes
+      .filter((note) => note.folderId !== undefined)
+      .map((note) => [note.id, note.folderId!] as const))
+    await importFolderTrash(c.env.DB, userId, manifest.folderTrash, folderIdMap, noteIdMap, noteFolders)
+    const sources = new Map(manifest.folderTrash.folders.map((folder) => [folder.id, folder]))
+    const mapped = new Set(folderIdMap.values())
+    const candidates: { id: string; depth: number }[] = []
+    for (const folder of manifest.folderTrash.folders) {
+      if (folder.deletedAt === null) continue
+      const names: string[] = []
+      let current: typeof folder | undefined = folder
+      const seen = new Set<string>()
+      while (current && !seen.has(current.id)) {
+        seen.add(current.id)
+        names.unshift(current.name)
+        current = current.parentId === null ? undefined : sources.get(current.parentId)
+      }
+      const id = ctx.folderCache.get(names.join('/').toLowerCase())
+      if (id && !priorFolderIds.has(id) && !mapped.has(id)) candidates.push({ id, depth: names.length })
+    }
+    for (const folder of candidates.sort((a, b) => b.depth - a.depth)) {
+      const result = await c.env.DB.prepare(`DELETE FROM folders WHERE id = ?1 AND user_id = ?2 AND deleted_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM notes WHERE folder_id = ?1 AND user_id = ?2)
+        AND NOT EXISTS (SELECT 1 FROM folders child WHERE child.parent_id = ?1 AND child.user_id = ?2 AND child.deleted_at IS NULL)`)
+        .bind(folder.id, userId).run()
+      if (result.meta.changes) await c.env.DB.prepare(`INSERT INTO changes (user_id, entity, entity_id, op, at)
+        VALUES (?1, 'folder', ?2, 'delete', ?3)`).bind(userId, folder.id, Date.now()).run()
+    }
   }
 }
 
@@ -535,7 +575,7 @@ async function importBackupMarkdown(
   backupContent: string,
   manifest: MarkdownBackupManifest,
   ctx: ImportContext,
-): Promise<void> {
+): Promise<string | null> {
   const hashes = entry.attachmentHashes
   const expectedHashes = new Set(hashes)
   const attachmentIds = await loadBackupAttachmentTargets(c.env.DB, userId, hashes)
@@ -578,12 +618,12 @@ async function importBackupMarkdown(
   if (existing) {
     if (ctx.conflict === 'skip') {
       ctx.result.skippedNotes++
-      return
+      return existing.id
     }
     if (ctx.conflict === 'duplicate') {
-      await insertNote(c, userId, { ...input, id: undefined, title: `${entry.title} (imported)` }, ctx)
+      const id = await insertNote(c, userId, { ...input, id: undefined, title: `${entry.title} (imported)` }, ctx)
       ctx.result.createdNotes++
-      return
+      return id
     }
     const outcome = await updateImportedNote(
       c,
@@ -598,7 +638,7 @@ async function importBackupMarkdown(
       ctx.result.skippedNotes++
       if (outcome === 'conflict') addWarning(ctx.result, `${entry.title}: the current note changed during restore and was kept`)
     }
-    return
+    return existing.id
   }
 
   const insertedId = await insertNote(c, userId, input, ctx)
@@ -609,6 +649,7 @@ async function importBackupMarkdown(
     updated_at: effectiveUpdatedAt,
   })
   ctx.result.createdNotes++
+  return insertedId
 }
 
 async function loadBackupAttachmentTargets(
@@ -684,6 +725,8 @@ async function importBundle(
     throw new Error(`A single import supports at most ${LIMITS.importArchiveEntriesMax * 2} tags`)
   }
   const rawAttachments = Array.isArray(bundle.attachments) ? bundle.attachments : []
+  const folderTrash = bundle.folderTrash === undefined ? null : parseFolderTrashBackup(bundle.folderTrash)
+  if (bundle.folderTrash !== undefined && !folderTrash) throw new Error('The folder trash backup is invalid')
   if (rawAttachments.length > LIMITS.importArchiveEntriesMax) {
     throw new Error(`A single import supports at most ${LIMITS.importArchiveEntriesMax} attachments`)
   }
@@ -876,6 +919,10 @@ async function importBundle(
   }
 
   await restoreTagMetadata(c.env.DB, userId, rawTags)
+  if (folderTrash) {
+    const noteFolders = new Map(bundle.notes.map((note) => [note.id, note.folderId] as const))
+    await importFolderTrash(c.env.DB, userId, folderTrash, folderIdMap, noteIdMap, noteFolders)
+  }
 }
 
 interface PreparedAttachmentCandidate {

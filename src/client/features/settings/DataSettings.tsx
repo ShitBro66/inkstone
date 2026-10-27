@@ -241,11 +241,11 @@ export function DataSettings() {
         })}>{t("settings.clean_up")}</Button>
         </SettingRow>
 
-        <SettingRow title={t("settings.empty_trash")} description={t("settings.permanently_delete_every_note_in_trash")}>
+        <SettingRow title={t("settings.empty_trash")} description={t("folders.empty_trash_description")}>
           <Button size="sm" variant="ghost" icon={<Trash2 size={13}/>} className="text-[var(--danger)]" loading={busy === 'trash'} disabled={busy !== null} onClick={() => run('trash', async () => {
             const ok = await confirm({
                 title: t("common.empty_trash"),
-                description: t("settings.cannot_be_undone"),
+                description: t("folders.empty_trash_description"),
                 confirmLabel: t("common.clear"),
                 tone: 'danger',
             });

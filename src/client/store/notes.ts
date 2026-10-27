@@ -4,7 +4,7 @@ import { useMemo } from 'react';
 import { countText, deriveExcerpt, extractTags, normalizeLinkKey, sortTagNames } from '@shared/markdown-utils';
 import { duplicateNoteTitle } from '@shared/text-utils';
 import { LIMITS } from '@shared/constants';
-import type { AppLocale, Folder, Note, NoteSummary, SortKey, SortOrder, SyncResponse, Tag, ViewKind, } from '@shared/types';
+import type { AppLocale, Folder, FolderTrashGroup, Note, NoteSummary, SortKey, SortOrder, SyncResponse, Tag, ViewKind, } from '@shared/types';
 import { api, ApiError, CLIENT_ID } from '../lib/api';
 import { localDb, publishBroadcast, type BroadcastPayload, type OutboxItem } from '../lib/db';
 import { folderDescendantIds } from '../lib/folders';
@@ -17,6 +17,7 @@ interface NotesState {
     contents: Record<string, string>;
     noteLoadErrors: Record<string, string>;
     folders: Folder[];
+    folderTrash: FolderTrashGroup[];
     tags: Tag[];
     cursor: number;
     hydrated: boolean;
@@ -70,6 +71,9 @@ interface NotesState {
         color?: string | null;
     }) => boolean;
     deleteFolder: (id: string) => boolean;
+    trashFolder: (id: string) => Promise<boolean>;
+    restoreFolderTrash: (id: string) => Promise<boolean>;
+    refreshFolderTrash: () => Promise<void>;
     refreshFolders: () => Promise<void>;
     refreshTags: () => Promise<void>;
     replayPending: () => Promise<void>;
@@ -90,6 +94,7 @@ interface PendingSummaryDerivation {
 const pendingSummaryDerivations = new Map<string, PendingSummaryDerivation>();
 let bootstrapPromise: Promise<void> | null = null;
 let pullPromise: Promise<void> | null = null;
+let folderTrashRefreshSequence = 0;
 let forcePullQueued = false;
 let outboxReplayPromise: Promise<void> | null = null;
 let folderStateGeneration = 0;
@@ -151,6 +156,7 @@ export const useNotes = create<NotesState>((set, get) => ({
     contents: {},
     noteLoadErrors: {},
     folders: [],
+    folderTrash: [],
     tags: [],
     cursor: 0,
     hydrated: false,
@@ -164,7 +170,8 @@ export const useNotes = create<NotesState>((set, get) => ({
         if (bootstrapPromise)
             return bootstrapPromise;
         const run = async () => {
-            set({ loading: true });
+            folderTrashRefreshSequence++;
+            set({ loading: true, folderTrash: [] });
             try {
                 const userId = useSession.getState().user?.id;
                 if (!userId)
@@ -815,6 +822,7 @@ export const useNotes = create<NotesState>((set, get) => ({
                 finishNoteMutation(id, mutation);
                 adoptNote(note, set, get);
                 useUi.getState().toast({ title: t("notes.restored"), tone: 'success' });
+                void get().pull().then(() => get().refreshFolderTrash()).catch(() => {});
             }
             catch (err) {
                 await recoverNoteMutation(id, mutation, err, set, get);
@@ -912,8 +920,6 @@ export const useNotes = create<NotesState>((set, get) => ({
             content: get().contents[note.id],
             hadContent: hasOwnContent(get().contents, note.id),
         }));
-        if (!snapshots.length)
-            return 0;
         const workspaceBefore = captureWorkspaceState();
         const ids = snapshots.map((snapshot) => snapshot.note.id);
         markNotesOptimisticallyPurged(ids, set, get);
@@ -930,6 +936,8 @@ export const useNotes = create<NotesState>((set, get) => ({
         }
         try {
             const result = await api.notes.emptyTrash();
+            folderTrashRefreshSequence++;
+            set({ folderTrash: [] });
             for (const id of ids) {
                 discardNoteRuntimeState(id);
                 void localDb.dropContent(id);
@@ -1092,6 +1100,63 @@ export const useNotes = create<NotesState>((set, get) => ({
             toastError(err, t("common.delete_failed"));
         });
         return true;
+    },
+    async trashFolder(id) {
+        const ids = folderDescendantIds(get().folders, id);
+        const notes = Object.values(get().notes).filter((note) => note.folderId !== null && ids.has(note.folderId) && note.deletedAt === null);
+        try {
+            for (const folderId of ids) await folderWriteTails.get(folderId);
+            for (const note of notes) {
+                commitPendingSummaryDerivation(note.id);
+                await noteWriteTails.get(note.id);
+            }
+            await get().flush({ immediate: true });
+            const pending = await localDb.getOutbox();
+            const noteIds = new Set(notes.map((note) => note.id));
+            if (notes.some((note) => dirty.has(note.id)) || pending.some((item) => noteIds.has(item.noteId))) {
+                useUi.getState().toast({ title: t("folders.unsaved_delete_canceled"), tone: 'warning' });
+                return false;
+            }
+            await enqueueFolderWrite(id, () => api.folders.remove(id, 'delete'));
+        }
+        catch (err) {
+            toastError(err, t("common.delete_failed"));
+            return false;
+        }
+        for (const note of notes) useUi.getState().removeWorkspaceNote(note.id);
+        try {
+            await get().pull({ force: true });
+            await get().refreshFolderTrash();
+            useUi.getState().toast({ title: t("folders.moved_to_trash"), tone: 'success' });
+        }
+        catch {
+            useUi.getState().toast({ title: t("folders.changed_refresh_failed"), tone: 'warning' });
+        }
+        return true;
+    },
+    async restoreFolderTrash(id) {
+        try {
+            await api.folders.restoreTrash(id);
+        }
+        catch (err) {
+            void get().pull().then(() => get().refreshFolderTrash()).catch(() => {});
+            toastError(err, t("common.restore_failed"));
+            return false;
+        }
+        try {
+            await get().pull({ force: true });
+            await get().refreshFolderTrash();
+            useUi.getState().toast({ title: t("folders.restored_with_contents"), tone: 'success' });
+        }
+        catch {
+            useUi.getState().toast({ title: t("folders.changed_refresh_failed"), tone: 'warning' });
+        }
+        return true;
+    },
+    async refreshFolderTrash() {
+        const sequence = ++folderTrashRefreshSequence;
+        const result = await api.folders.trash();
+        if (sequence === folderTrashRefreshSequence) set({ folderTrash: result.groups });
     },
     async refreshFolders() {
         const sequence = ++folderRefreshSequence;

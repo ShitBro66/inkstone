@@ -585,8 +585,10 @@ export async function removeMcpFolderAndPromote(
               AND EXISTS (SELECT 1 FROM folders
                 WHERE id = ?1 AND user_id = ?2 AND updated_at = ?3 AND deleted_at = ?5)`,
         ).bind(current.id, context.userId, current.updated_at, current.parent_id, now),
+        // Retain the parent record for descendants already in a folder trash group.
         context.env.DB.prepare(
-          `DELETE FROM folders WHERE id = ?1 AND user_id = ?2 AND updated_at = ?3 AND deleted_at = ?4`,
+          `UPDATE folders SET updated_at = MAX(updated_at + 1, ?4)
+            WHERE id = ?1 AND user_id = ?2 AND updated_at = ?3 AND deleted_at = ?4`,
         ).bind(current.id, context.userId, current.updated_at, now),
       ])
       if (!results[6]?.meta.changes) throw ApiError.conflict('The folder changed elsewhere')

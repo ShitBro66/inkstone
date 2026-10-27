@@ -8,14 +8,29 @@ import { toFolder, type FolderRow } from '../db/rows'
 import { FTS_QUEUE_CONFLICT_SQL } from '../db/writes'
 import { ApiError } from '../lib/errors'
 import { isValidId, newId } from '../lib/id'
-import { broadcastCursor } from '../lib/notify'
+import { broadcastCursor, scheduleFtsDrain } from '../lib/notify'
 import { JSON_BODY_LIMITS, readJson } from '../lib/request'
 import { requireAuth } from '../middleware/auth'
 import { aiDeleteNeededSql } from '../mcp/ai-search'
+import { listFolderTrash, restoreFolderTrash } from '../db/folder-trash'
 
 export const foldersRoutes = new Hono<AppBindings>()
 
 foldersRoutes.use('*', requireAuth)
+
+foldersRoutes.get('/trash', async (c) => {
+  return c.json({ groups: await listFolderTrash(c.env.DB, c.get('userId')) })
+})
+
+foldersRoutes.post('/trash/:id/restore', async (c) => {
+  try {
+    await restoreFolderTrash(c.env.DB, c.get('userId'), c.req.param('id'), c.get('database').ftsEnabled)
+  } finally {
+    await broadcastCursor(c)
+    scheduleFtsDrain(c)
+  }
+  return c.json({ ok: true })
+})
 
 const FOLDER_SELECT = `f.id, f.parent_id, f.name, f.icon, f.color, f.position, f.created_at, f.updated_at`
 
@@ -326,8 +341,10 @@ foldersRoutes.delete('/:id', async (c) => {
             AND EXISTS (SELECT 1 FROM folders
               WHERE id = ?1 AND user_id = ?2 AND updated_at = ?3 AND deleted_at = ?5)`,
       ).bind(id, userId, row.updated_at, row.parent_id, now),
+      // Retain the parent record so a separately trashed descendant can recover its original path.
       c.env.DB.prepare(
-        `DELETE FROM folders WHERE id = ?1 AND user_id = ?2 AND updated_at = ?3
+        `UPDATE folders SET updated_at = MAX(updated_at + 1, ?4)
+          WHERE id = ?1 AND user_id = ?2 AND updated_at = ?3
           AND deleted_at = ?4`,
       ).bind(id, userId, row.updated_at, now),
     ]
@@ -335,8 +352,20 @@ foldersRoutes.delete('/:id', async (c) => {
     if (!results.at(-1)?.meta.changes) throw ApiError.conflict('The folder changed elsewhere. Refresh and try again')
   } else {
     const tree = subtreeCteWithRevision()
-    const noteIds = `SELECT n.id FROM notes n WHERE n.user_id = ?2 AND n.folder_id IN (SELECT id FROM subtree)`
+    const noteIds = `SELECT n.id FROM notes n WHERE n.user_id = ?2 AND n.deleted_at IS NULL
+      AND n.folder_id IN (SELECT id FROM subtree)`
     const statements: D1PreparedStatement[] = [
+      c.env.DB.prepare(
+        `${tree} INSERT INTO folder_trash_groups
+          (id, user_id, root_folder_id, deleted_at, folder_ids_json, note_ids_json, links_json)
+         SELECT ?5, ?2, ?1, ?4,
+           (SELECT json_group_array(id) FROM subtree),
+           (SELECT json_group_array(id) FROM notes WHERE id IN (${noteIds})),
+           (SELECT json_group_array(json_object('sourceNoteId', source_note_id, 'targetKey', target_key,
+             'targetTitle', target_title, 'targetNoteId', target_note_id)) FROM links
+             WHERE user_id = ?2 AND source_note_id IN (${noteIds}))
+         WHERE EXISTS (SELECT 1 FROM subtree)`,
+      ).bind(id, userId, row.updated_at, now, newId()),
       c.env.DB.prepare(
         `${tree} INSERT INTO changes (user_id, entity, entity_id, op, at)
          SELECT ?2, 'folder', id, 'delete', ?4 FROM subtree`,
@@ -344,12 +373,12 @@ foldersRoutes.delete('/:id', async (c) => {
       c.env.DB.prepare(
         `${tree} INSERT INTO changes (user_id, entity, entity_id, op, at)
          SELECT ?2, 'note', id, 'upsert', ?4 FROM notes
-          WHERE user_id = ?2 AND folder_id IN (SELECT id FROM subtree)`,
+          WHERE id IN (${noteIds})`,
       ).bind(id, userId, row.updated_at, now),
       c.env.DB.prepare(
         `${tree} INSERT OR REPLACE INTO ai_index_queue (user_id, note_id, kind, created_at)
          SELECT ?2, id, 'delete', ?4 FROM notes
-          WHERE user_id = ?2 AND folder_id IN (SELECT id FROM subtree)
+          WHERE id IN (${noteIds})
             AND ${aiDeleteNeededSql('?2', 'notes.id')}`,
       ).bind(id, userId, row.updated_at, now),
       c.env.DB.prepare(`${tree} DELETE FROM links WHERE source_note_id IN (${noteIds})`)
@@ -375,19 +404,21 @@ foldersRoutes.delete('/:id', async (c) => {
     }
     statements.push(
       c.env.DB.prepare(
-        `${tree} UPDATE notes SET folder_id = NULL, deleted_at = COALESCE(deleted_at, ?4),
+        `${tree} UPDATE notes SET deleted_at = ?4,
           updated_at = MAX(updated_at + 1, ?4), rev = rev + 1
-          WHERE user_id = ?2 AND folder_id IN (SELECT id FROM subtree)`,
+          WHERE id IN (${noteIds})`,
       ).bind(id, userId, row.updated_at, now),
       c.env.DB.prepare(
-        `${tree} DELETE FROM folders WHERE user_id = ?2 AND id IN (SELECT id FROM subtree)`,
-      ).bind(id, userId, row.updated_at),
+        `${tree} UPDATE folders SET deleted_at = ?4, updated_at = MAX(updated_at + 1, ?4)
+          WHERE user_id = ?2 AND id IN (SELECT id FROM subtree)`,
+      ).bind(id, userId, row.updated_at, now),
     )
     const results = await c.env.DB.batch(statements)
     if (!results.at(-1)?.meta.changes) throw ApiError.conflict('The folder changed elsewhere. Refresh and try again')
   }
 
   await broadcastCursor(c)
+  if (strategy === 'delete') scheduleFtsDrain(c)
   return c.json({ ok: true })
 })
 
