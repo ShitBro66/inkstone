@@ -811,20 +811,9 @@
 
 .ink-prose hr {
   border: none;
+  border-top: 1px solid var(--border-default);
   margin: 1.6em 0;
-  height: 1em;
-  position: relative;
-}
-.ink-prose hr::before {
-  content: '· · ·';
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  letter-spacing: 0.55em;
-  text-indent: 0.55em;
-  color: var(--text-quaternary);
-  font-size: 0.95em;
+  height: 0;
 }
 
 
