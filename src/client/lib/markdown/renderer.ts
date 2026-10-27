@@ -639,8 +639,9 @@ export interface MarkdownBlock {
 }
 
 /** Parse once with the full document environment so reference links retain their targets. */
-export function renderMarkdownBlocks(source: string): { blocks: MarkdownBlock[]; headings: Heading[] } {
+export function renderMarkdownBlocks(source: string, strictLineBreaks = true): { blocks: MarkdownBlock[]; headings: Heading[] } {
     const env = emptyEnvironment();
+    env.strictLineBreaks = strictLineBreaks;
     const tokens = md.parse(stripObsidianComments(source), env);
     const blocks: MarkdownBlock[] = [];
     for (let i = 0; i < tokens.length; i++) {

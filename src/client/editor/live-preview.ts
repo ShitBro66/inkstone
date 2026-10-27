@@ -35,7 +35,7 @@ class RenderedBlock extends WidgetType {
         const settings = useSession.getState().settings.preview;
         const dark = document.documentElement.dataset.theme === 'dark';
         const prepare = async () => {
-            await resolveNoteEmbeds(host, { currentContent: this.source, currentTitle: this.title, isCurrent: () => alive });
+            await resolveNoteEmbeds(host, { currentContent: this.source, currentTitle: this.title, strictLineBreaks: settings.strictLineBreaks, isCurrent: () => alive });
             if (!alive) return;
             await enhancePreview(host, { math: settings.math, mermaid: settings.mermaid, dark, codeBlockCollapseLines: 0 });
             if (alive && settings.mermaid) await renderPendingMermaid(host, dark, { isCurrent: () => alive });
@@ -131,7 +131,7 @@ function decorate(state: EditorState, live: LiveState, title: string): Decoratio
 export function livePreview(onHeadings: (headings: Heading[]) => void, getTitle: () => string = () => ''): Extension {
     const field = StateField.define<LiveState>({
         create(state) {
-            const result = renderMarkdownBlocks(state.doc.toString());
+            const result = renderMarkdownBlocks(state.doc.toString(), useSession.getState().settings.preview.strictLineBreaks);
             const value: LiveState = { ...result, decorations: Decoration.none, focused: false, revision: 0 };
             value.decorations = decorate(state, value, getTitle());
             return value;
@@ -153,7 +153,7 @@ export function livePreview(onHeadings: (headings: Heading[]) => void, getTitle:
                     html: delta ? block.html.replace(/(data-(?:task-)?line=")(\d+)(")/g, (_, before, line, after) => `${before}${Number(line) + delta}${after}`) : block.html,
                     endLine: tr.state.doc.lineAt(tr.changes.mapPos(to, -1)).number }];
             }) : value.blocks;
-            const next = { ...value, blocks: mapped, ...(refreshed ? renderMarkdownBlocks(tr.state.doc.toString()) : {}),
+            const next = { ...value, blocks: mapped, ...(refreshed ? renderMarkdownBlocks(tr.state.doc.toString(), useSession.getState().settings.preview.strictLineBreaks) : {}),
                 focused: focused ? focused.value : value.focused, revision: value.revision + (refreshed?.value ? 1 : 0) };
             next.decorations = decorate(tr.state, next, getTitle());
             return next;
