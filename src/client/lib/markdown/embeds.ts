@@ -8,6 +8,7 @@ import { parseWikiTarget, renderMarkdown } from './renderer'
 
 interface ResolveOptions {
   currentContent: string
+  strictLineBreaks?: boolean
   currentTitle: string
   isCurrent?: () => boolean
 }
@@ -101,7 +102,7 @@ async function resolveWithin(
       const body = embed.querySelector<HTMLElement>('.note-embed-body')
       const head = embed.querySelector<HTMLElement>('.note-embed-head')
       if (!body) continue
-      const rendered = renderMarkdown(resolved.markdown)
+      const rendered = renderMarkdown(resolved.markdown, context.strictLineBreaks)
       body.innerHTML = rendered.html
       body.querySelectorAll<HTMLInputElement>('input.task-list-item-checkbox').forEach((input) => {
         input.disabled = true

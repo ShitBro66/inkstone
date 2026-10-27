@@ -25,6 +25,7 @@ export interface RenderResult {
     frontMatterErrors: string[];
 }
 interface RenderEnvironment {
+    strictLineBreaks: boolean;
     headings: Heading[];
     hasMath: boolean;
     hasMermaid: boolean;
@@ -57,6 +58,7 @@ const md = new MarkdownIt({
     typographer: false,
     langPrefix: 'language-',
 });
+md.renderer.rules.softbreak = (_tokens, _index, _options, env) => renderEnv(env).strictLineBreaks ? '\n' : '<br>\n';
 md.use(taskLists, { enabled: true, label: false })
     .use(footnote)
     .use(mark)
@@ -657,8 +659,9 @@ export function renderMarkdownBlocks(source: string): { blocks: MarkdownBlock[];
     return { blocks, headings: env.headings };
 }
 
-export function renderMarkdown(source: string): RenderResult {
+export function renderMarkdown(source: string, strictLineBreaks = true): RenderResult {
     const env = emptyEnvironment();
+    env.strictLineBreaks = strictLineBreaks;
     const raw = md.render(stripObsidianComments(source), env);
     const sanitized = DOMPurify.sanitize(raw, PURIFY_CONFIG);
     const html = materializeTrustedTasks(sanitized, env.taskNonce);
@@ -804,6 +807,7 @@ export function parseFenceInfo(source: string): FenceInfo {
 function emptyEnvironment(): RenderEnvironment {
     const nonce = createNonce();
     return {
+        strictLineBreaks: true,
         headings: [],
         hasMath: false,
         hasMermaid: false,

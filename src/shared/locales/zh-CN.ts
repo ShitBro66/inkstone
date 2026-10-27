@@ -1,5 +1,7 @@
 import type { MessageKey } from './en-US';
 export const ZH_CN_MESSAGES = {
+    "settings.strict_line_breaks": "严格换行",
+    "settings.strict_line_breaks_description": "开启后，根据 Markdown 标准，单个换行符在预览模式下不再生效（无法实际换行）。",
     "editor.search.find": "查找",
     "editor.search.replace": "替换",
     "editor.search.find_in_note": "在当前笔记中查找",

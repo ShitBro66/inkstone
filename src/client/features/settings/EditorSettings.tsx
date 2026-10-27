@@ -47,6 +47,10 @@ export function EditorSettings() {
       <section>
         <h3 className="mb-1 text-[11px] font-semibold tracking-[0.06em] text-[var(--text-quaternary)]">{t("common.preview")}</h3>
 
+        <SettingRow title={t("settings.strict_line_breaks")} description={t("settings.strict_line_breaks_description")}>
+          <Switch checked={preview.strictLineBreaks} onChange={(strictLineBreaks) => void update({ preview: { strictLineBreaks } })} label={t("settings.strict_line_breaks")}/>
+        </SettingRow>
+
         <SettingRow title={t("settings.scroll_sync")} description={t("settings.keep_the_editor_and_preview_scrolled_together")}>
           <Switch checked={preview.syncScroll} onChange={(syncScroll) => void update({ preview: { syncScroll } })} label={t("settings.scroll_sync")}/>
         </SettingRow>

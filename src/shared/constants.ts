@@ -84,6 +84,7 @@ export const DEFAULT_SETTINGS: UserSettings = {
   },
   preview: {
     layout: 'live',
+    strictLineBreaks: true,
     syncScroll: true,
     showToc: true,
     math: true,
@@ -187,6 +188,7 @@ export function mergeSettings(partial: unknown): UserSettings {
   )
 
   base.preview.layout = enumValue(preview.layout, EDITOR_LAYOUTS, base.preview.layout)
+  base.preview.strictLineBreaks = booleanValue(preview.strictLineBreaks, base.preview.strictLineBreaks)
   base.preview.syncScroll = booleanValue(preview.syncScroll, base.preview.syncScroll)
   base.preview.showToc = booleanValue(preview.showToc, base.preview.showToc)
   base.preview.math = booleanValue(preview.math, base.preview.math)

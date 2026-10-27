@@ -118,6 +118,7 @@ export interface EditorSettings {
 
 export interface PreviewSettings {
   layout: EditorLayout
+  strictLineBreaks: boolean
   syncScroll: boolean
   showToc: boolean
   math: boolean

@@ -1,4 +1,6 @@
 export const EN_US_MESSAGES = {
+    "settings.strict_line_breaks": "Strict line breaks",
+    "settings.strict_line_breaks_description": "When enabled, single line breaks will not be rendered in reading view, following the Markdown standard.",
     "editor.search.find": "Find",
     "editor.search.replace": "Replace",
     "editor.search.find_in_note": "Find in this note",

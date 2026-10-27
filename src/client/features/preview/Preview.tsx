@@ -74,7 +74,7 @@ export const Preview = memo(function Preview({
 
 
   const debounced = useDebounced(content, 90)
-  const rendered = useMemo(() => renderMarkdown(debounced), [debounced, locale])
+  const rendered = useMemo(() => renderMarkdown(debounced, settings.preview.strictLineBreaks), [debounced, locale, settings.preview.strictLineBreaks])
   const embedContextTitle = rendered.hasEmbeds ? currentTitle : ''
   const [committedHtml, setCommittedHtml] = useState(rendered.html)
   const committedHtmlRef = useRef(committedHtml)
@@ -150,6 +150,7 @@ export const Preview = memo(function Preview({
         await resolveNoteEmbeds(staging, {
           currentContent: debounced,
           currentTitle: embedContextTitle,
+          strictLineBreaks: settings.preview.strictLineBreaks,
           isCurrent: () => !cancelled && revision === preparationRef.current,
         })
       }
@@ -189,6 +190,7 @@ export const Preview = memo(function Preview({
     rendered.html,
     scrollerRef,
     settings.preview.math,
+    settings.preview.strictLineBreaks,
     settings.preview.mermaid,
     settings.preview.codeBlockCollapse,
     settings.preview.codeBlockCollapseLines,
