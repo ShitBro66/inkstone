@@ -17,15 +17,18 @@ export const tagsRoutes = new Hono<AppBindings>()
 
 tagsRoutes.use('*', requireAuth)
 
-const TAG_SELECT = `t.id, t.name, t.color, t.created_at,
-  (SELECT COUNT(*) FROM note_tags nt JOIN notes n ON n.id = nt.note_id
-    WHERE nt.tag_id = t.id AND n.user_id = t.user_id
-      AND n.deleted_at IS NULL AND n.is_archived = 0) AS note_count`
+const TAG_SELECT = `SELECT t.id, t.name, t.color, t.created_at, COUNT(n.id) AS note_count
+  FROM tags t
+  LEFT JOIN note_tags nt ON nt.tag_id = t.id
+  LEFT JOIN notes n ON n.id = nt.note_id AND n.user_id = t.user_id
+    AND n.deleted_at IS NULL AND n.is_archived = 0`
 
 tagsRoutes.get('/', async (c) => {
   const { results } = await c.env.DB.prepare(
-    `SELECT ${TAG_SELECT} FROM tags t
-     WHERE t.user_id = ?1 ORDER BY t.name COLLATE NOCASE ASC`,
+    `${TAG_SELECT}
+     WHERE t.user_id = ?1
+     GROUP BY t.id, t.name, t.color, t.created_at
+     ORDER BY t.name COLLATE NOCASE ASC`,
   )
     .bind(c.get('userId'))
     .all<TagRow>()
@@ -225,8 +228,9 @@ tagsRoutes.patch('/:id', async (c) => {
     await broadcastCursor(c)
   }
   const row = await c.env.DB.prepare(
-    `SELECT ${TAG_SELECT} FROM tags t
-     WHERE t.id = ?2 AND t.user_id = ?1`,
+    `${TAG_SELECT}
+     WHERE t.id = ?2 AND t.user_id = ?1
+     GROUP BY t.id, t.name, t.color, t.created_at`,
   )
     .bind(userId, id)
     .first<TagRow>()
@@ -280,8 +284,9 @@ async function loadTag(
   id: string,
 ): Promise<ReturnType<typeof toTag> | null> {
   const row = await db.prepare(
-    `SELECT ${TAG_SELECT} FROM tags t
-     WHERE t.id = ?2 AND t.user_id = ?1`,
+    `${TAG_SELECT}
+     WHERE t.id = ?2 AND t.user_id = ?1
+     GROUP BY t.id, t.name, t.color, t.created_at`,
   ).bind(userId, id).first<TagRow>()
   return row ? toTag(row) : null
 }

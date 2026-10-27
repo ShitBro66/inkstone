@@ -15,10 +15,11 @@ export const CHANGE_BOUNDS_SQL = `SELECT
 
 const FOLDER_SELECT = `f.id, f.parent_id, f.name, f.icon, f.color, f.position, f.created_at, f.updated_at`
 
-const TAG_SELECT = `t.id, t.name, t.color, t.created_at,
-  (SELECT COUNT(*) FROM note_tags nt JOIN notes n ON n.id = nt.note_id
-    WHERE nt.tag_id = t.id AND n.user_id = t.user_id
-      AND n.deleted_at IS NULL AND n.is_archived = 0) AS note_count`
+const TAG_SELECT = `SELECT t.id, t.name, t.color, t.created_at, COUNT(n.id) AS note_count
+  FROM tags t
+  LEFT JOIN note_tags nt ON nt.tag_id = t.id
+  LEFT JOIN notes n ON n.id = nt.note_id AND n.user_id = t.user_id
+    AND n.deleted_at IS NULL AND n.is_archived = 0`
 
 
 syncRoutes.get('/', requireAuth, async (c) => {
@@ -140,16 +141,19 @@ syncRoutes.get('/', requireAuth, async (c) => {
   const tags = facetsFull
     ? (
         await c.env.DB.prepare(
-          `SELECT ${TAG_SELECT} FROM tags t
-           WHERE t.user_id = ?1 ORDER BY t.name COLLATE NOCASE`,
+          `${TAG_SELECT}
+           WHERE t.user_id = ?1
+           GROUP BY t.id, t.name, t.color, t.created_at
+           ORDER BY t.name COLLATE NOCASE`,
         )
           .bind(userId)
           .all<TagRow>()
       ).results
     : await loadInChunks(tagIds, (ids) =>
         c.env.DB.prepare(
-          `SELECT ${TAG_SELECT} FROM tags t
-           WHERE t.user_id = ?1 AND t.id IN (${placeholders(ids.length, 2)})`,
+          `${TAG_SELECT}
+           WHERE t.user_id = ?1 AND t.id IN (${placeholders(ids.length, 2)})
+           GROUP BY t.id, t.name, t.color, t.created_at`,
         )
           .bind(userId, ...ids)
           .all<TagRow>(),
@@ -229,8 +233,10 @@ async function fullSnapshot(
     !after
       ? db
           .prepare(
-            `SELECT ${TAG_SELECT} FROM tags t
-             WHERE t.user_id = ?1 ORDER BY t.name COLLATE NOCASE`,
+            `${TAG_SELECT}
+             WHERE t.user_id = ?1
+             GROUP BY t.id, t.name, t.color, t.created_at
+             ORDER BY t.name COLLATE NOCASE`,
           )
           .bind(userId)
           .all<TagRow>()
