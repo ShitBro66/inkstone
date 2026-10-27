@@ -33,6 +33,7 @@ import { preferredScrollBehavior } from '../../lib/motion'
 
 export interface PreviewProps {
   content: string
+  readOnly?: boolean
   noteId?: string
   noteTitle?: string
   onHeadings?: (headings: Heading[]) => void
@@ -45,6 +46,7 @@ export interface PreviewProps {
 
 export const Preview = memo(function Preview({
   content,
+  readOnly = false,
   noteId,
   noteTitle,
   onHeadings,
@@ -216,6 +218,13 @@ export const Preview = memo(function Preview({
     onRendered?.()
   }, [committedHtml, onInitialRender, onRendered, scrollerRef])
 
+  useLayoutEffect(() => {
+    if (!readOnly) return
+    hostRef.current?.querySelectorAll<HTMLInputElement>('input[type="checkbox"]').forEach((checkbox) => {
+      checkbox.disabled = true
+    })
+  }, [committedHtml, readOnly])
+
 
   const onClick = (event: React.MouseEvent) => {
     const target = event.target as HTMLElement
@@ -271,6 +280,10 @@ export const Preview = memo(function Preview({
 
     const checkbox = target.closest<HTMLInputElement>('input[type="checkbox"]')
     if (checkbox) {
+      if (readOnly) {
+        event.preventDefault()
+        return
+      }
       if (checkbox.disabled || checkbox.closest('.note-embed-body')) return
 
 
@@ -316,7 +329,7 @@ export const Preview = memo(function Preview({
           if (!isCurrent()) return
           wikiScrollCleanupRef.current = scrollToWikiTarget(hostRef, parsed, isCurrent)
         })
-      } else if (parsed.noteTitle) {
+      } else if (parsed.noteTitle && !readOnly) {
         void createNote({ title: parsed.noteTitle, open: false }).then((id) => {
           if (!id) return
           toast({ title: t("preview.created_title", { title: parsed.noteTitle }), tone: 'success' })

@@ -358,6 +358,15 @@ export function createDemoBackend(): DemoBackend {
     folderCount: group.folderIds.filter((id) => trashedFolders.get(id)?.deletedAt === group.deletedAt).length,
     noteIds: group.noteIds.filter((id) => state.notes.get(id)?.deletedAt === group.deletedAt),
   })).filter((group) => group.folderCount > 0 || group.noteIds.length > 0) }))
+  app.get('/api/folders/trash/:id', (c) => {
+    const group = folderTrash.get(c.req.param('id'))
+    if (!group) return apiError(404, 'not_found', 'Folder trash group not found')
+    const folders = group.folderIds.flatMap((id) => {
+      const folder = trashedFolders.get(id) ?? state.folders.get(id)
+      return folder ? [folder] : []
+    }).sort((a, b) => a.position - b.position || a.createdAt - b.createdAt || a.id.localeCompare(b.id))
+    return c.json({ folders })
+  })
   app.post('/api/folders/trash/:id/restore', (c) => {
     const group = folderTrash.get(c.req.param('id'))
     if (!group) return apiError(404, 'not_found', 'Folder trash group not found')

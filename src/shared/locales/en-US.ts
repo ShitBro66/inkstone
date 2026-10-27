@@ -45,6 +45,7 @@ export const EN_US_MESSAGES = {
     "folders.restored_with_contents": "Folder hierarchy and notes restored",
     "folders.changed_refresh_failed": "The operation completed, but refreshing failed. Reload to see the latest state.",
     "folders.deleted_groups": "Deleted folder groups",
+    "folders.trash_note_read_only": "Trashed notes are read-only. Restore them to edit.",
     "folders.trash_group_summary": "{folders} folders · {notes} notes",
     "folders.restore_group_title": "Restore {name} and its contents?",
     "folders.restore_group_description": "Restore the original hierarchy and note locations. Existing folders are preserved; conflicting names receive a number suffix.",

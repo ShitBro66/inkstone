@@ -118,6 +118,28 @@ describe('folder subtree trash and restore', () => {
     expect(database.prepare("SELECT COUNT(*) AS n FROM links WHERE source_note_id = 'note-root'").get()!.n).toBe(0)
   })
 
+  it('reads the original group hierarchy without restoring folders or including unrelated folders', async () => {
+    const id = await trash()
+    const response = await request('GET', '/api/folders/trash/' + id)
+    expect(response.status).toBe(200)
+    const detail = await response.json() as { folders: { id: string; parentId: string | null }[] }
+    expect(detail.folders.map((entry) => [entry.id, entry.parentId])).toEqual([
+      ['child', 'root'], ['grandchild', 'child'], ['root', 'parent'],
+    ])
+    expect(database.prepare("SELECT COUNT(*) AS n FROM folders WHERE deleted_at IS NOT NULL").get()!.n).toBe(3)
+    expect((await request('GET', '/api/notes/note-child')).status).toBe(200)
+    userId = 'user-b'
+    expect((await request('GET', '/api/folders/trash/' + id)).status).toBe(404)
+  })
+
+  it('keeps restored ancestors in the browsing hierarchy for remaining group notes', async () => {
+    const id = await trash()
+    await request('POST', '/api/notes/note-child/restore')
+    const detail = await (await request('GET', '/api/folders/trash/' + id)).json() as { folders: { id: string }[] }
+    expect(detail.folders.map((entry) => entry.id)).toEqual(['child', 'grandchild', 'root'])
+    expect((await groups()).groups[0].noteIds).toEqual(['note-root'])
+  })
+
   it('restores the whole hierarchy, links and indexing work without restoring previously trashed notes', async () => {
     const id = await trash()
     expect((await request('POST', '/api/folders/trash/' + id + '/restore')).status).toBe(200)

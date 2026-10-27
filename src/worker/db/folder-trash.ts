@@ -1,6 +1,6 @@
 import { LIMITS } from '@shared/constants'
 import { truncateText } from '@shared/text-utils'
-import type { FolderTrashBackup, FolderTrashGroup } from '@shared/types'
+import type { Folder, FolderTrashBackup, FolderTrashGroup } from '@shared/types'
 import { NOTE_COLUMNS_FULL, toFolder, type FolderRow, type NoteRow } from './rows'
 import { buildNoteDerivedStatements, FTS_QUEUE_CONFLICT_SQL, LINK_TARGET_SUBQUERY } from './writes'
 import { ApiError } from '../lib/errors'
@@ -45,6 +45,19 @@ export async function listFolderTrash(db: D1Database, userId: string): Promise<F
     folderCount: row.folder_count,
     noteIds: JSON.parse(row.note_ids_json) as string[],
   })).filter((group) => group.folderCount > 0 || group.noteIds.length > 0)
+}
+
+export async function getFolderTrashFolders(db: D1Database, userId: string, groupId: string): Promise<Folder[]> {
+  const group = await db.prepare(`SELECT folder_ids_json FROM folder_trash_groups WHERE id = ?1 AND user_id = ?2`)
+    .bind(groupId, userId).first<{ folder_ids_json: string }>()
+  if (!group) throw ApiError.notFound('Folder trash group not found')
+  const { results } = await db.prepare(
+    `SELECT f.id, f.parent_id, f.name, f.icon, f.color, f.position, f.created_at, f.updated_at
+     FROM json_each(?2) item CROSS JOIN folders f
+     WHERE f.id = item.value AND f.user_id = ?1
+     ORDER BY f.position ASC, f.created_at ASC, f.id ASC`,
+  ).bind(userId, group.folder_ids_json).all<FolderRow>()
+  return results.map(toFolder)
 }
 
 export async function folderRestoreStatements(

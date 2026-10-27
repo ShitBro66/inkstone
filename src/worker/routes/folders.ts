@@ -12,7 +12,7 @@ import { broadcastCursor, scheduleFtsDrain } from '../lib/notify'
 import { JSON_BODY_LIMITS, readJson } from '../lib/request'
 import { requireAuth } from '../middleware/auth'
 import { aiDeleteNeededSql } from '../mcp/ai-search'
-import { listFolderTrash, restoreFolderTrash } from '../db/folder-trash'
+import { getFolderTrashFolders, listFolderTrash, restoreFolderTrash } from '../db/folder-trash'
 
 export const foldersRoutes = new Hono<AppBindings>()
 
@@ -20,6 +20,10 @@ foldersRoutes.use('*', requireAuth)
 
 foldersRoutes.get('/trash', async (c) => {
   return c.json({ groups: await listFolderTrash(c.env.DB, c.get('userId')) })
+})
+
+foldersRoutes.get('/trash/:id', async (c) => {
+  return c.json({ folders: await getFolderTrashFolders(c.env.DB, c.get('userId'), c.req.param('id')) })
 })
 
 foldersRoutes.post('/trash/:id/restore', async (c) => {

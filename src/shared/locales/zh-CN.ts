@@ -46,6 +46,7 @@ export const ZH_CN_MESSAGES = {
     "folders.restored_with_contents": "目录层级和笔记已恢复",
     "folders.changed_refresh_failed": "操作已完成，最新状态同步失败，请刷新页面",
     "folders.deleted_groups": "已删除的文件夹组",
+    "folders.trash_note_read_only": "回收站中的笔记仅供查看，恢复后可编辑。",
     "folders.trash_group_summary": "{folders} 个文件夹 · {notes} 篇笔记",
     "folders.restore_group_title": "恢复“{name}”及其内容？",
     "folders.restore_group_description": "恢复原来的目录层级和笔记位置。现有文件夹会保留，重名的恢复目录自动添加数字后缀。",

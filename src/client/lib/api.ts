@@ -362,6 +362,7 @@ export const api = {
   folders: {
     list: () => request<{ folders: Folder[] }>('/api/folders'),
     trash: () => request<{ groups: FolderTrashGroup[] }>('/api/folders/trash'),
+    trashFolders: (id: string) => request<{ folders: Folder[] }>(`/api/folders/trash/${id}`),
     restoreTrash: (id: string) => request<{ ok: true }>(`/api/folders/trash/${id}/restore`, { method: 'POST' }),
     create: (body: { id?: string; name?: string; parentId?: string | null; icon?: string | null; color?: string | null }) =>
       request<Folder>('/api/folders', { method: 'POST', body }),
