@@ -87,7 +87,7 @@ export function SharePage({ slug }: {
     const rendered = useMemo(() => {
         if (!note)
             return null;
-        const result = renderMarkdown(note.content);
+        const result = renderMarkdown(note.content, note.strictLineBreaks);
         return {
             ...result,
             html: addShareAccess(result.html, note.share.slug),

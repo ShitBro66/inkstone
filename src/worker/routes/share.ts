@@ -1,6 +1,6 @@
 import { Hono, type Context } from 'hono'
 import { setCookie } from 'hono/cookie'
-import { LIMITS } from '@shared/constants'
+import { LIMITS, mergeSettings } from '@shared/constants'
 import type { PublicNote, ShareInfo, ShareListItem } from '@shared/types'
 import type { AppBindings } from '../env'
 import { ApiError } from '../lib/errors'
@@ -214,7 +214,7 @@ shareRoutes.post('/:slug', async (c) => {
   }
 
   const note = await c.env.DB.prepare(
-    `SELECT n.title, n.content, n.created_at, n.updated_at, u.name, u.avatar_url
+    `SELECT n.title, n.content, n.created_at, n.updated_at, u.name, u.avatar_url, u.settings
        FROM notes n JOIN users u ON u.id = n.user_id
       WHERE n.id = ?1 AND n.user_id = ?2 AND n.deleted_at IS NULL`,
   )
@@ -226,6 +226,7 @@ shareRoutes.post('/:slug', async (c) => {
       updated_at: number
       name: string
       avatar_url: string
+      settings: string
     }>()
   if (!note) throw ApiError.notFound('The note has been deleted')
 
@@ -251,6 +252,7 @@ shareRoutes.post('/:slug', async (c) => {
   const body_: PublicNote = {
     title: note.title,
     content: note.content,
+    strictLineBreaks: mergeSettings(JSON.parse(note.settings)).preview.strictLineBreaks,
     createdAt: note.created_at,
     updatedAt: note.updated_at,
     author: { name: note.name, avatarUrl: note.avatar_url },

@@ -507,6 +507,7 @@ export interface ShareListItem extends ShareInfo {
 export interface PublicNote {
   title: string
   content: string
+  strictLineBreaks: boolean
   updatedAt: number
   createdAt: number
   author: { name: string; avatarUrl: string }

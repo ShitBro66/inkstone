@@ -912,6 +912,7 @@ export function createDemoBackend(): DemoBackend {
     const response: PublicNote = {
       title: note.title,
       content: note.content,
+      strictLineBreaks: state.settings.preview.strictLineBreaks,
       updatedAt: note.updatedAt,
       createdAt: note.createdAt,
       author: { name: state.user.name, avatarUrl: state.user.avatarUrl },
