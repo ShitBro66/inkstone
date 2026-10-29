@@ -9,7 +9,10 @@ export function Lightbox() {
     const lightbox = useUi((s) => s.lightbox);
     const setLightbox = useUi((s) => s.setLightbox);
     const panelRef = useRef<HTMLDivElement>(null);
+    const dragRef = useRef<{ pointerId: number; startX: number; startY: number; x: number; y: number } | null>(null);
     const [scale, setScale] = useState(1);
+    const [position, setPosition] = useState({ x: 0, y: 0 });
+    const [dragging, setDragging] = useState(false);
     const [failed, setFailed] = useState(false);
     const close = () => setLightbox(null);
     useEscape(Boolean(lightbox), close);
@@ -19,22 +22,49 @@ export function Lightbox() {
         setScale(1);
         setFailed(false);
     }, [lightbox?.src]);
+    useLayoutEffect(() => {
+        if (scale > 1)
+            return;
+        setPosition({ x: 0, y: 0 });
+        setDragging(false);
+        dragRef.current = null;
+    }, [scale, lightbox?.src]);
     useEffect(() => {
         if (!lightbox)
             return;
         const onWheel = (event: WheelEvent) => {
-            if (!event.ctrlKey && !event.metaKey)
-                return;
             event.preventDefault();
             setScale((s) => Math.min(6, Math.max(0.3, s - event.deltaY * 0.002)));
         };
         window.addEventListener('wheel', onWheel, { passive: false });
         return () => window.removeEventListener('wheel', onWheel);
     }, [lightbox]);
+    const startDrag = (event: React.PointerEvent<HTMLImageElement>) => {
+        if (scale <= 1 || event.button !== 0 || dragRef.current)
+            return;
+        event.preventDefault();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        dragRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, x: position.x, y: position.y };
+        setDragging(true);
+    };
+    const moveDrag = (event: React.PointerEvent<HTMLImageElement>) => {
+        const drag = dragRef.current;
+        if (!drag || drag.pointerId !== event.pointerId)
+            return;
+        setPosition({ x: drag.x + event.clientX - drag.startX, y: drag.y + event.clientY - drag.startY });
+    };
+    const finishDrag = (event: React.PointerEvent<HTMLImageElement>) => {
+        if (dragRef.current?.pointerId !== event.pointerId)
+            return;
+        dragRef.current = null;
+        setDragging(false);
+        if (event.currentTarget.hasPointerCapture(event.pointerId))
+            event.currentTarget.releasePointerCapture(event.pointerId);
+    };
     if (!lightbox)
         return null;
     return createPortal(<div ref={panelRef} role="dialog" aria-modal="true" aria-label={t("preview.image_preview")} tabIndex={-1} className="app-viewport-fixed anim-fade fixed z-[260] flex items-center justify-center bg-[oklch(0%_0_0/78%)] backdrop-blur-[2px] outline-none" onClick={close}>
-      <div className="absolute top-[calc(12px+env(safe-area-inset-top))] right-2 flex items-center gap-1 md:top-4 md:right-4" onClick={(e) => e.stopPropagation()}>
+      <div className="absolute z-10 top-[calc(12px+env(safe-area-inset-top))] right-2 flex items-center gap-1 rounded-[var(--r-md)] bg-black/50 p-1 md:top-4 md:right-4" onClick={(e) => e.stopPropagation()}>
         <Tooltip label={t("common.zoom_out")} side="bottom">
           <IconButton label={t("common.zoom_out")} disabled={failed || scale <= 0.3} onClick={() => setScale((s) => Math.max(0.3, s - 0.25))} className="text-white/70 hover:bg-white/10 hover:text-white">
             <ZoomOut size={16}/>
@@ -63,7 +93,13 @@ export function Lightbox() {
       {failed ? (<div role="status" className="flex max-w-[80vw] flex-col items-center gap-2 rounded-[var(--r-lg)] bg-black/35 px-5 py-4 text-center text-[12px] text-white/75">
           <ImageOff size={24}/>
           {t("preview.could_not_load_image")}
-        </div>) : (<img src={lightbox.src} alt={lightbox.alt} onError={() => setFailed(true)} onClick={(e) => e.stopPropagation()} onDoubleClick={() => setScale((s) => (s === 1 ? 2 : 1))} style={{ transform: `scale(${scale})` }} className={`max-h-[86vh] max-w-[92vw] rounded-[var(--r-md)] object-contain transition-transform duration-200 ease-[var(--ease-out)] ${scale === 1 ? 'cursor-zoom-in' : 'cursor-zoom-out'}`}/>)}
+        </div>) : (<img src={lightbox.src} alt={lightbox.alt} draggable={false}
+          onError={() => setFailed(true)} onClick={(e) => e.stopPropagation()}
+          onDoubleClick={() => setScale((s) => (s === 1 ? 2 : 1))}
+          onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={finishDrag}
+          onPointerCancel={finishDrag} onLostPointerCapture={finishDrag}
+          style={{ transform: `scale(${scale})`, translate: `${position.x}px ${position.y}px`, transitionDuration: dragging ? '0ms' : undefined }}
+          className={`max-h-[86vh] max-w-[92vw] touch-none select-none rounded-[var(--r-md)] object-contain transition-transform duration-200 ease-[var(--ease-out)] ${scale > 1 ? 'cursor-grab active:cursor-grabbing' : 'cursor-zoom-in'}`}/>)}
 
       {lightbox.alt && (<div className="absolute bottom-[calc(16px+env(safe-area-inset-bottom))] left-1/2 max-w-[82vw] -translate-x-1/2 truncate rounded-full bg-black/50 px-3 py-1.5 text-[12px] text-white/80 md:bottom-6 md:max-w-[70vw]">
           {lightbox.alt}
