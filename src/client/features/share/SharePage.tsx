@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { KeyRound, Lock, Moon, Sun } from 'lucide-react';
 import { LIMITS } from '@shared/constants';
 import type { PublicNote } from '@shared/types';
@@ -15,6 +15,8 @@ import { useUi } from '../../store/ui';
 import { moveMarkdownTabFocus, selectMarkdownTab } from '../preview/markdown-tabs';
 import { t, useLocale } from "../../lib/i18n";
 
+const Lightbox = lazy(() => import('../preview/Lightbox').then((m) => ({ default: m.Lightbox })));
+
 export function SharePage({ slug }: {
     slug: string;
 }) {
@@ -26,6 +28,8 @@ export function SharePage({ slug }: {
     const [loading, setLoading] = useState(true);
     const [dark, setDark] = useState(() => document.documentElement.dataset.theme === 'dark');
     const toast = useUi((s) => s.toast);
+    const lightbox = useUi((s) => s.lightbox);
+    const setLightbox = useUi((s) => s.setLightbox);
     const hostRef = useRef<HTMLDivElement>(null);
     const requestRef = useRef<AbortController | null>(null);
     const enhancementRevisionRef = useRef(0);
@@ -77,13 +81,14 @@ export function SharePage({ slug }: {
         setError(null);
         void load();
         return () => {
+            setLightbox(null);
             requestRef.current?.abort();
             requestRef.current = null;
             if (appliedTitleRef.current && document.title === appliedTitleRef.current)
                 document.title = originalTitleRef.current;
             appliedTitleRef.current = null;
         };
-    }, [load]);
+    }, [load, setLightbox]);
     const rendered = useMemo(() => {
         if (!note)
             return null;
@@ -156,6 +161,12 @@ export function SharePage({ slug }: {
                 }, 900);
                 copyResetTimersRef.current.set(copyButton, timer);
             }).catch(() => toast({ title: t("preview.could_not_copy"), tone: 'danger' }));
+            return;
+        }
+        const image = target.closest<HTMLImageElement>('img');
+        if (image?.src) {
+            event.preventDefault();
+            setLightbox({ src: image.src, alt: image.alt });
             return;
         }
         const collapseButton = target.closest<HTMLButtonElement>('[data-code-collapse]');
@@ -249,6 +260,9 @@ export function SharePage({ slug }: {
             </footer>
           </article>) : null}
       </main>
+      <Suspense fallback={null}>
+        {lightbox && <Lightbox />}
+      </Suspense>
     </div>);
 }
 function addShareAccess(html: string, slug: string): string {
