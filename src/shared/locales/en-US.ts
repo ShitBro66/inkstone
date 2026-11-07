@@ -1175,6 +1175,8 @@ export const EN_US_MESSAGES = {
     "workspace.title_748d7d": "Title",
     "workspace.title_level": "Title level",
     "workspace.upload_failed": "Upload failed",
+    "workspace.uploading_file": "Uploading {filename}",
+    "workspace.cancel_file_upload": "Cancel upload of {filename}",
     "workspace.value0_unchanged_lines_hidden": "… {value0} unchanged lines hidden …",
     "workspace.will_appear_here": "will appear here.",
     "seed.welcome_note": `---

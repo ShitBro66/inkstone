@@ -18,6 +18,7 @@ import { createTag, deleteTag, renameTag, setTagColor } from '../tags/tagMutatio
 import { t, useLocale } from "../../lib/i18n";
 import { SearchButton } from '../shell/SearchButton';
 import { ExplorerNote, groupExplorerNotes } from './ExplorerNote';
+import { leftDropTarget, useDropState } from './drag-drop';
 import { useBreakpoint } from '../../lib/hooks';
 export function Sidebar({ collapsed = false, onCollapse, }: {
     collapsed?: boolean;
@@ -339,9 +340,11 @@ export function FolderSection({ mobile = false }: { mobile?: boolean }) {
     }, [folders, movingId]);
     return (<>
       <section className={cn('mt-4 rounded-[var(--r-md)]', rootDropping && 'ring-1 ring-[var(--accent)]')} onDragOverCapture={(event) => {
-            if (!event.dataTransfer.types.includes('application/x-inkstone-folder') && !event.dataTransfer.types.includes('application/x-inkstone-note'))
+            const noteDrag = event.dataTransfer.types.includes('application/x-inkstone-note');
+            if (!noteDrag && !event.dataTransfer.types.includes('application/x-inkstone-folder'))
                 return;
-            if (event.target instanceof Element && event.target.closest('[data-folder-drop-target]')) {
+            const dropTargets = noteDrag ? '[data-folder-drop-target], [data-note-drop-target]' : '[data-folder-drop-target]';
+            if (event.target instanceof Element && event.target.closest(dropTargets)) {
                 setRootDropping(false);
                 return;
             }
@@ -432,7 +435,8 @@ function FolderRow({ node, notesByFolder, mobile, canOpenToSide, siblings, index
     const renamingRef = useRef(false);
     const [menuOpen, setMenuOpen] = useState(false);
     const active = view === 'folder' && activeFolderId === node.id;
-    const hasChildren = node.children.length > 0 || Boolean(notesByFolder.get(node.id)?.length);
+    const childNotes = notesByFolder.get(node.id);
+    const hasChildren = node.children.length > 0 || Boolean(childNotes?.length);
     const justCreated = createdFolderId === node.id;
     const [childrenMounted, setChildrenMounted] = useState(expanded && hasChildren);
     const [childrenVisible, setChildrenVisible] = useState(expanded && hasChildren);
@@ -647,7 +651,7 @@ function FolderRow({ node, notesByFolder, mobile, canOpenToSide, siblings, index
       {childrenMounted && (<div role="group" aria-hidden={!childrenVisible} inert={!childrenVisible} className={cn('folder-children-grid', childrenVisible && 'is-expanded')}>
           <div className="min-h-0 space-y-px overflow-hidden">
             {node.children.map((child, childIndex) => (<FolderRow key={child.id} node={child} notesByFolder={notesByFolder} mobile={mobile} canOpenToSide={canOpenToSide} siblings={node.children} index={childIndex} parentNode={node} parentSiblings={siblings} onCreateChild={onCreateChild} onMove={onMove} onChooseParent={onChooseParent} onEditAppearance={onEditAppearance} createdFolderId={createdFolderId} renamingId={renamingId} onStartRename={onStartRename} onFinishRename={onFinishRename}/>))}
-            {notesByFolder.get(node.id)?.map((note) => <ExplorerNote key={note.id} note={note} depth={node.depth + 1} canOpenToSide={canOpenToSide}/>)}
+            {childNotes?.map((note) => <ExplorerNote key={note.id} note={note} depth={node.depth + 1} canOpenToSide={canOpenToSide} siblings={childNotes}/>)}
           </div>
         </div>)}
 
@@ -811,34 +815,4 @@ function TagRow({ tag, active, renaming, onOpen, onStartRename, onFinishRename, 
       <Menu anchor={rowRef} open={menuOpen} onClose={() => setMenuOpen(false)} items={menuItems}/>
       {menu.point && (<Menu anchor={menu.point} open onClose={menu.close} items={menuItems}/>)}
     </div>);
-}
-function useDropState<T>(idle: T) {
-    const [state, setState] = useState(idle);
-    useEffect(() => {
-        if (state === idle) return;
-        const reset = () => setState(idle);
-        const onKeyDown = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') reset();
-        };
-        const onLeaveWindow = (event: DragEvent) => {
-            if (event.target === document.documentElement && !event.relatedTarget) reset();
-        };
-        window.addEventListener('drop', reset, true);
-        window.addEventListener('dragend', reset, true);
-        window.addEventListener('blur', reset);
-        window.addEventListener('keydown', onKeyDown, true);
-        window.addEventListener('dragleave', onLeaveWindow, true);
-        return () => {
-            window.removeEventListener('drop', reset, true);
-            window.removeEventListener('dragend', reset, true);
-            window.removeEventListener('blur', reset);
-            window.removeEventListener('keydown', onKeyDown, true);
-            window.removeEventListener('dragleave', onLeaveWindow, true);
-        };
-    }, [state, idle]);
-    return [state, setState] as const;
-}
-function leftDropTarget(event: React.DragEvent<HTMLElement>): boolean {
-    const next = event.relatedTarget;
-    return !(next instanceof Node) || !event.currentTarget.contains(next);
 }

@@ -1176,6 +1176,8 @@ export const ZH_CN_MESSAGES = {
     "workspace.title_748d7d": "标题",
     "workspace.title_level": "标题层级",
     "workspace.upload_failed": "上传失败",
+    "workspace.uploading_file": "正在上传 {filename}",
+    "workspace.cancel_file_upload": "取消上传 {filename}",
     "workspace.value0_unchanged_lines_hidden": "… 中间 {value0} 行未展开 …",
     "workspace.will_appear_here": "就会出现在这里。",
     "seed.welcome_note": `---

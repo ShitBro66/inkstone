@@ -15,7 +15,7 @@ import { Drawer, Menu, Tooltip, type MenuItem } from '../../components/overlay';
 import { Segmented } from '../../components/form';
 import { EditorSkeleton, Empty } from '../../components/feedback';
 import { DeferredCodeEditor } from '../../editor/CodeEditor';
-import { insertFiles } from '../../editor/paste';
+import { insertFiles, type PasteHandlers } from '../../editor/paste';
 import { optimizeImageFile } from '../../lib/image';
 import { exportNoteAsHtml, exportNoteAsMarkdown, exportNoteAsPdf } from '../../lib/export-note';
 import { Preview } from '../preview/Preview';
@@ -74,6 +74,8 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
     const moreButtonRef = useRef<HTMLButtonElement>(null);
     const exportMenuRef = useRef<HTMLButtonElement>(null);
     const [view, setView] = useState<EditorView | null>(null);
+    const uploadSequence = useRef(0);
+    const [uploads, setUploads] = useState<Array<{ id: number; filename: string; percent: number | null; cancel: () => void }>>([]);
     const readingKey = userId && note ? readingPositionKey(userId, note.id) : null;
     const pendingReadingRef = useRef<{ key: string; position: ReturnType<typeof captureReadingPosition> } | null>(null);
     const readingTimerRef = useRef<number | undefined>(undefined);
@@ -195,11 +197,23 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
             .map((n) => ({ id: n.id, title: n.title, excerpt: n.excerpt })),
         tags: () => tags.map((t) => ({ name: t.name, count: t.count })),
     }), [notes, tags, note?.id]);
-    const handlers = useMemo(() => ({
-        uploadFile: async (file: File) => {
+    const handlers = useMemo<PasteHandlers>(() => ({
+        uploadFile: async (file, { signal, cancel }) => {
+            const id = ++uploadSequence.current;
+            const removeUpload = () => setUploads((items) => items.filter((item) => item.id !== id));
+            setUploads((items) => [...items, { id, filename: file.name, percent: null, cancel: () => {
+                cancel();
+                removeUpload();
+            } }]);
             try {
                 const optimized = await optimizeImageFile(file);
-                const uploaded = await api.files.upload(optimized, note?.id);
+                signal.throwIfAborted();
+                const uploaded = await api.files.upload(optimized, note?.id, {
+                    signal,
+                    onUploadProgress: (percent) => setUploads((items) => items.map((item) =>
+                        item.id === id ? { ...item, percent } : item)),
+                });
+                signal.throwIfAborted();
                 return {
                     url: uploaded.url,
                     filename: uploaded.filename,
@@ -207,12 +221,16 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
                 };
             }
             catch (err) {
+                if (signal.aborted) return null;
                 toast({
                     title: t("workspace.upload_failed"),
                     description: err instanceof Error ? err.message : String(err),
                     tone: 'danger',
                 });
                 return null;
+            }
+            finally {
+                removeUpload();
             }
         },
         replaceDetachedUpload: (placeholder: string, replacement: string) => {
@@ -494,6 +512,19 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
       </header>
 
       {settings.editor.showToolbar && showEditor && (<EditorToolbar runCommand={runEditorCommand} mobile={isMobile} onPickImage={() => fileInputRef.current?.click()}/>)}
+
+      {uploads.length > 0 && (<div className="max-h-36 shrink-0 overflow-y-auto border-b border-[var(--border-subtle)] bg-[var(--bg-surface)] px-3 py-1.5">
+        {uploads.map((upload) => (<div key={upload.id} className="flex max-w-lg items-center gap-2 py-1">
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[12px] text-[var(--text-secondary)]" title={upload.filename}>
+              {t("workspace.uploading_file", { filename: upload.filename })}
+            </div>
+            <progress aria-label={t("workspace.uploading_file", { filename: upload.filename })} max={100} value={upload.percent ?? undefined} className="mt-1 block h-1 w-full appearance-none overflow-hidden rounded-full bg-[var(--accent-soft)] [&::-webkit-progress-bar]:bg-[var(--accent-soft)] [&::-webkit-progress-value]:rounded-full [&::-webkit-progress-value]:bg-[var(--accent)] [&::-moz-progress-bar]:rounded-full [&::-moz-progress-bar]:bg-[var(--accent)] indeterminate:motion-safe:animate-pulse"/>
+          </div>
+          {upload.percent !== null && <span className="shrink-0 text-[11px] tabular text-[var(--text-tertiary)]">{upload.percent}%</span>}
+          <Button size="sm" variant="ghost" aria-label={t("workspace.cancel_file_upload", { filename: upload.filename })} onClick={upload.cancel}>{t("common.cancel")}</Button>
+        </div>))}
+      </div>)}
 
       <div ref={containerRef} className={cn("flex min-h-0 flex-1", isMobile && "flex-col")} data-editor-layout={layout}>
         <div hidden={!showEditor} inert={!showEditor} className="min-h-0 min-w-0" style={{ width: showSplit && !isMobile ? editorWidth : outlineVisible ? `calc(100% - ${OUTLINE_WIDTH}px)` : '100%', flex: isMobile ? 1 : undefined }}>

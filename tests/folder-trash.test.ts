@@ -4,6 +4,7 @@ import { Hono } from 'hono'
 import { SCHEMA_STATEMENTS, initializeDatabase } from '../src/worker/db/schema'
 import { foldersRoutes } from '../src/worker/routes/folders'
 import { notesRoutes } from '../src/worker/routes/notes'
+import { syncRoutes } from '../src/worker/routes/sync'
 import { transferRoutes } from '../src/worker/routes/transfer'
 import { buildSnapshot, materializeSnapshot } from '../src/worker/backup/snapshot'
 import type { AppBindings } from '../src/worker/env'
@@ -90,6 +91,7 @@ describe('folder subtree trash and restore', () => {
     app.onError((error, c) => c.json({ error: error.message }, (error as { status?: 400 }).status ?? 500))
     app.route('/api/folders', foldersRoutes)
     app.route('/api/notes', notesRoutes)
+    app.route('/api/sync', syncRoutes)
     app.route('/api', transferRoutes)
     env = { DB: d1(database) } as AppBindings['Bindings']
     folder('parent', null, 'Parent')
@@ -256,6 +258,41 @@ describe('folder subtree trash and restore', () => {
     await initializeDatabase(env)
     expect(database.prepare("SELECT version FROM schema_migrations WHERE version = 14").get()!.version).toBe(14)
     expect(database.prepare("SELECT name FROM sqlite_master WHERE name = 'folder_trash_groups'").get()!.name).toBe('folder_trash_groups')
+  })
+
+  describe('folder note ordering', () => {
+    const first = '1'.padStart(26, '0')
+    const second = '2'.padStart(26, '0')
+    const outside = '3'.padStart(26, '0')
+    const order = (noteIds: string[]) => request('PUT', '/api/folders/root/note-order', JSON.stringify({ noteIds }))
+
+    beforeEach(() => {
+      note(first, 'root')
+      note(second, 'root')
+      note(outside, 'child')
+    })
+
+    it('persists note order and syncs positions without editing the notes', async () => {
+      database.prepare(`INSERT INTO changes (user_id, entity, entity_id, op, at) VALUES ('user-a', 'note', ?, 'upsert', 1)`).run(first)
+      expect((await order([second, first])).status).toBe(200)
+      const response = await request('GET', '/api/sync?since=1')
+      expect(response.status).toBe(200)
+      const sync = await response.json() as { notes: Array<{ id: string; position: number; rev: number; updatedAt: number }> }
+      expect(sync.notes.sort((a, b) => a.position - b.position)).toMatchObject([
+        { id: second, position: -2, rev: 1, updatedAt: 1 },
+        { id: first, position: -1, rev: 1, updatedAt: 1 },
+      ])
+      expect((await order([second, first])).status).toBe(200)
+      expect(database.prepare('SELECT COUNT(*) AS count FROM changes').get()!.count).toBe(3)
+    })
+
+    it('does not partially reorder when an ID is from another folder or account', async () => {
+      expect((await order([first, outside])).status).toBe(409)
+      userId = 'user-b'
+      expect((await order([second, first])).status).toBe(409)
+      expect(database.prepare('SELECT COUNT(*) AS count FROM notes WHERE position < 0').get()!.count).toBe(0)
+      expect(database.prepare('SELECT COUNT(*) AS count FROM changes').get()!.count).toBe(0)
+    })
   })
 
   for (const format of ['json', 'markdown'] as const) {

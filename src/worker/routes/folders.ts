@@ -135,6 +135,43 @@ foldersRoutes.post('/', async (c) => {
   return c.json(await loadFolder(c.env.DB, userId, id), 201)
 })
 
+foldersRoutes.put('/:id/note-order', async (c) => {
+  const userId = c.get('userId')
+  const folderId = c.req.param('id')
+  const { noteIds } = await readJson<{ noteIds: unknown }>(c, JSON_BODY_LIMITS.note)
+  if (!Array.isArray(noteIds) || !noteIds.length || !noteIds.every(isValidId) || new Set(noteIds).size !== noteIds.length) {
+    throw ApiError.badRequest('noteIds must contain unique note IDs')
+  }
+
+  const requested = JSON.stringify(noteIds)
+  const members = `SELECT n.id, n.position, item.key AS sort_index
+      FROM json_each(?1) item JOIN notes n ON n.id = item.value
+      JOIN folders f ON f.id = n.folder_id AND f.user_id = n.user_id
+      WHERE n.user_id = ?2 AND n.folder_id = ?3 AND n.deleted_at IS NULL
+        AND n.is_archived = 0 AND f.deleted_at IS NULL`
+  const order = `WITH ordered AS MATERIALIZED (${members})`
+  const complete = `(SELECT COUNT(*) FROM ordered) = ?4`
+  const db = c.env.DB
+  // Record changes before changing positions, with the same membership guard in both writes.
+  const [validation, changes] = await db.batch<{ count: number }>([
+    db.prepare(`SELECT COUNT(*) AS count FROM (${members})`).bind(requested, userId, folderId),
+    db.prepare(`${order}
+      INSERT INTO changes (user_id, entity, entity_id, op, at)
+      SELECT ?2, 'note', id, 'upsert', ?5 FROM ordered
+      WHERE position <> sort_index - ?4 AND ${complete}`)
+      .bind(requested, userId, folderId, noteIds.length, Date.now()),
+    db.prepare(`${order}
+      UPDATE notes SET position = ordered.sort_index - ?4 FROM ordered
+      WHERE notes.id = ordered.id AND notes.position <> ordered.sort_index - ?4 AND ${complete}`)
+      .bind(requested, userId, folderId, noteIds.length),
+  ])
+  if (validation.results[0]?.count !== noteIds.length) {
+    throw ApiError.conflict('The notes no longer belong to this folder. Refresh and try again')
+  }
+  if (changes.meta.changes) await broadcastCursor(c)
+  return c.json({ ok: true as const })
+})
+
 foldersRoutes.patch('/:id', async (c) => {
   const userId = c.get('userId')
   const id = c.req.param('id')

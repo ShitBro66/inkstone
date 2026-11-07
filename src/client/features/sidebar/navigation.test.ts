@@ -100,6 +100,86 @@ describe('folder drag feedback', () => {
     });
 });
 
+describe('dragging notes inside a folder', () => {
+    const second = { ...note, id: 'note-second', title: 'Zebra', position: 10 };
+    const otherFolder = { ...folder, id: 'other', name: 'Other', position: 1000 };
+    const outside = { ...note, id: 'note-outside', folderId: otherFolder.id };
+
+    function dragSession() {
+        const data = new Map<string, string>();
+        const transfer = {
+            get types() { return [...data.keys()]; },
+            setData: (type: string, value: string) => data.set(type, value),
+            getData: vi.fn((type: string) => data.get(type) ?? ''),
+            effectAllowed: 'move',
+            dropEffect: 'none',
+        };
+        async function dispatch(target: Element, type: string, clientY = 105) {
+            const event = new Event(type, { bubbles: true, cancelable: true });
+            Object.defineProperties(event, {
+                dataTransfer: { value: transfer },
+                clientY: { value: clientY },
+                relatedTarget: { value: null },
+            });
+            await act(() => target.dispatchEvent(event));
+        }
+        return { transfer, dispatch };
+    }
+
+    async function renderNotes() {
+        useNotes.setState({ folders: [folder, otherFolder], notes: { [note.id]: note, [second.id]: second, [outside.id]: outside } });
+        useUi.setState({ expandedFolders: [folder.id, otherFolder.id] });
+        await act(async () => { root.render(createElement(Sidebar)); });
+        const row = (id: string) => container.querySelector<HTMLElement>(`[data-tree-note-id="${id}"] [data-note-drop-target]`)!;
+        for (const item of [note, second, outside]) {
+            vi.spyOn(row(item.id), 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 100, 200, 30));
+        }
+        return row;
+    }
+
+    it.each([
+        [second.id, note.id, 105, 'top-0'],
+        [note.id, second.id, 125, 'bottom-0'],
+    ])('reorders through the %s drop target', async (source, target, y, line) => {
+        const save = vi.spyOn(api.folders, 'reorderNotes').mockResolvedValue({ ok: true });
+        const row = await renderNotes();
+        const { dispatch, transfer } = dragSession();
+        await dispatch(row(source), 'dragstart');
+        await dispatch(row(target), 'dragover', y);
+        expect(transfer.getData).not.toHaveBeenCalled();
+        expect(row(target).querySelector(`span.${line}`)).not.toBeNull();
+        expect(container.querySelector('[role="tree"]')!.closest('section')!.classList.contains('ring-1')).toBe(false);
+        await dispatch(row(target), 'drop', y);
+        expect(save).toHaveBeenCalledExactlyOnceWith(folder.id, [second.id, note.id]);
+        expect([...container.querySelectorAll<HTMLElement>('[data-tree-note-id]')].map((node) => node.dataset.treeNoteId)).toEqual([second.id, note.id, outside.id]);
+        expect(row(target).querySelector(`span.${line}`)).toBeNull();
+    });
+
+    it('leaves a different folder note alone and still moves notes onto folder rows', async () => {
+        const save = vi.spyOn(api.folders, 'reorderNotes').mockResolvedValue({ ok: true });
+        const patch = vi.fn(async () => {});
+        useNotes.setState({ patchNote: patch });
+        const row = await renderNotes();
+        const { dispatch } = dragSession();
+        await dispatch(row(note.id), 'dragstart');
+        await dispatch(row(outside.id), 'dragover');
+        await dispatch(row(outside.id), 'drop');
+        expect(save).not.toHaveBeenCalled();
+        expect(patch).not.toHaveBeenCalled();
+        await dispatch(button(container, otherFolder.name).closest('[data-folder-drop-target]')!, 'drop');
+        expect(patch).toHaveBeenCalledExactlyOnceWith(note.id, { folderId: otherFolder.id });
+    });
+
+    it('restores the previous visible order if saving fails', async () => {
+        vi.spyOn(api.folders, 'reorderNotes').mockRejectedValue(new Error('Offline'));
+        const row = await renderNotes();
+        const { dispatch } = dragSession();
+        await dispatch(row(second.id), 'dragstart');
+        await dispatch(row(note.id), 'drop');
+        expect([...container.querySelectorAll<HTMLElement>('[data-tree-note-id]')].map((node) => node.dataset.treeNoteId)).toEqual([note.id, second.id, outside.id]);
+    });
+});
+
 describe('explorer and collection navigation', () => {
     it('defaults to a hidden desktop list and reopens it for every collection', () => {
         expect(useUi.getInitialState().listCollapsed).toBe(true);

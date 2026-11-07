@@ -40,6 +40,7 @@ import type {
 } from '@shared/types'
 import { publishBroadcast } from './db'
 import { getLocale, t, translateApiError } from './i18n'
+import { IS_DEMO_MODE } from './runtime'
 
 
 export const CLIENT_ID =
@@ -74,11 +75,12 @@ interface RequestOptions {
   body?: unknown
   signal?: AbortSignal
   formData?: FormData
+  onUploadProgress?: (percent: number) => void
   timeoutMs?: number
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', body, signal, formData, timeoutMs } = options
+  const { method = 'GET', body, signal, formData, onUploadProgress, timeoutMs } = options
 
   const headers: Record<string, string> = {
     [CLIENT_HEADER]: '1',
@@ -111,13 +113,16 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
 
   try {
-    const response = await fetch(path, {
-      method,
-      headers,
-      body: payload,
-      signal: timeoutController?.signal ?? signal,
-      credentials: 'same-origin',
-    })
+    const requestSignal = timeoutController?.signal ?? signal
+    const response = formData && onUploadProgress && !IS_DEMO_MODE
+      ? await sendUploadRequest(path, method, headers, formData, requestSignal, onUploadProgress)
+      : await fetch(path, {
+          method,
+          headers,
+          body: payload,
+          signal: requestSignal,
+          credentials: 'same-origin',
+        })
 
     const notifyOtherTabs = method !== 'GET' && shouldNotifyOtherTabs(path)
     if (response.status === 204) {
@@ -168,6 +173,37 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     if (timeoutHandle) window.clearTimeout(timeoutHandle)
     detachCallerSignal?.()
   }
+}
+
+function sendUploadRequest(
+  path: string,
+  method: string,
+  headers: Record<string, string>,
+  formData: FormData,
+  signal: AbortSignal | undefined,
+  onProgress: (percent: number) => void,
+): Promise<Response> {
+  const xhr = new XMLHttpRequest()
+  const abort = () => xhr.abort()
+  return new Promise<Response>((resolve, reject) => {
+    signal?.throwIfAborted()
+    xhr.open(method, path)
+    for (const [name, value] of Object.entries(headers)) xhr.setRequestHeader(name, value)
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) onProgress(Math.floor(event.loaded * 100 / event.total))
+    }
+    xhr.onload = () => {
+      const contentType = xhr.getResponseHeader('Content-Type')
+      resolve(new Response(xhr.responseText === '' ? null : xhr.responseText, {
+        status: xhr.status,
+        headers: contentType === null ? undefined : { 'Content-Type': contentType },
+      }))
+    }
+    xhr.onerror = () => reject(new TypeError('Upload failed'))
+    xhr.onabort = () => reject(new DOMException('Upload cancelled', 'AbortError'))
+    signal?.addEventListener('abort', abort, { once: true })
+    xhr.send(formData)
+  }).finally(() => signal?.removeEventListener('abort', abort))
 }
 
 function isJsonResponse(response: Response): boolean {
@@ -374,6 +410,8 @@ export const api = {
       color?: string | null
     }) =>
       request<Folder>(`/api/folders/${id}`, { method: 'PATCH', body }),
+    reorderNotes: (id: string, noteIds: string[]) =>
+      request<{ ok: true }>(`/api/folders/${id}/note-order`, { method: 'PUT', body: { noteIds } }),
     remove: (id: string, strategy: 'move-up' | 'delete' = 'move-up') =>
       request<{ ok: true }>(`/api/folders/${id}?strategy=${strategy}`, { method: 'DELETE' }),
   },
@@ -415,11 +453,11 @@ export const api = {
       `/api/files${toQuery({ cursor })}`,
       { signal },
     ),
-    upload: (file: File, noteId?: string) => {
+    upload: (file: File, noteId?: string, options?: Pick<RequestOptions, 'signal' | 'onUploadProgress'>) => {
       const form = new FormData()
       form.append('file', file)
       if (noteId) form.append('noteId', noteId)
-      return request<Attachment>('/api/files', { method: 'POST', formData: form })
+      return request<Attachment>('/api/files', { method: 'POST', formData: form, ...options })
     },
     remove: (id: string) => request<{ ok: true }>(`/api/files/${id}`, { method: 'DELETE' }),
     prune: () => request<{ removed: number; freedBytes: number }>('/api/files/prune', { method: 'POST' }),

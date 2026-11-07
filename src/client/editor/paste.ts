@@ -5,7 +5,7 @@ import { t } from "../lib/i18n";
 
 
 export interface PasteHandlers {
-    uploadFile: (file: File) => Promise<{
+    uploadFile: (file: File, upload: { signal: AbortSignal; cancel: () => void }) => Promise<{
         url: string;
         filename: string;
         isImage: boolean;
@@ -20,19 +20,14 @@ export function pasteExtension(handlers: PasteHandlers) {
             if (!clipboard)
                 return false;
 
-            const files = [...clipboard.files];
-            if (!files.length) {
-                const types = clipboard.types ? Array.from(clipboard.types) : [];
-                const hasRichText = types.includes('text/html') || types.includes('text/plain');
-                if (!hasRichText && clipboard.items) {
-                    for (const item of [...clipboard.items]) {
-                        if (item.kind === 'file' && item.type.startsWith('image/')) {
-                            const file = item.getAsFile();
-                            if (file) files.push(file);
-                        }
-                    }
-                }
-            }
+            const listedFiles = [...clipboard.files];
+            const itemFiles = [...clipboard.items].flatMap((item) => {
+                if (item.kind !== 'file' || (!listedFiles.length && !item.type.startsWith('image/'))) return [];
+                const file = item.getAsFile();
+                return file ? [file] : [];
+            });
+            // These are two views of the clipboard files, not two separate batches.
+            const files = itemFiles.length > listedFiles.length ? itemFiles : listedFiles;
             if (files.length) {
                 event.preventDefault();
                 void insertFiles(view, files, handlers);
@@ -92,43 +87,52 @@ export function pasteExtension(handlers: PasteHandlers) {
     });
 }
 export async function insertFiles(view: EditorView, files: File[], handlers: PasteHandlers): Promise<void> {
-
-
-    const pending = files.map((file) => {
-        const range = view.state.selection.main;
+    if (!files.length) return;
+    const pending = files.map((file, index) => {
+        const separator = index + 1 < files.length ? '\n' : '';
         const marker = `<!-- inkstone-upload:${uploadId()} -->`;
-        const placeholder = `${t("editor.uploading_value0", { value0: escapeMarkdownLabel(file.name) })}${marker}`;
-        view.dispatch({
-            changes: { from: range.from, to: range.to, insert: placeholder },
-            selection: EditorSelection.cursor(range.from + placeholder.length),
-            userEvent: 'input.paste',
-        });
-        return { file, placeholder };
+        const placeholder = `${t("editor.uploading_value0", { value0: escapeMarkdownLabel(file.name) })}${marker}${separator}`;
+        return { file, placeholder, separator };
     });
-    await Promise.all(pending.map(async ({ file, placeholder }) => {
+    const range = view.state.selection.main;
+    const insert = pending.map(({ placeholder }) => placeholder).join('');
+    view.dispatch({
+        changes: { from: range.from, to: range.to, insert },
+        selection: EditorSelection.cursor(range.from + insert.length),
+        userEvent: 'input.paste',
+    });
+    await Promise.all(pending.map(async ({ file, placeholder, separator }) => {
+        const controller = new AbortController();
+        const replace = (markdown: string) => {
+            if (!view.dom.isConnected) {
+                handlers.replaceDetachedUpload?.(placeholder, markdown);
+                return;
+            }
+            const at = view.state.doc.toString().indexOf(placeholder);
+            if (at < 0) {
+                handlers.replaceDetachedUpload?.(placeholder, markdown);
+                return;
+            }
+            view.dispatch({
+                changes: { from: at, to: at + placeholder.length, insert: markdown },
+                userEvent: 'input.paste',
+            });
+        };
+        const cancel = () => {
+            controller.abort();
+            replace('');
+        };
         let result: Awaited<ReturnType<PasteHandlers['uploadFile']>> = null;
         try {
-            result = await handlers.uploadFile(file);
+            result = await handlers.uploadFile(file, { signal: controller.signal, cancel });
         }
         catch {
         }
+        if (controller.signal.aborted) return;
         const markdown = result
             ? uploadedFileMarkdown(result)
             : t("editor.upload_failed_value0", { value0: safeHtmlComment(file.name) });
-        if (!view.dom.isConnected) {
-            handlers.replaceDetachedUpload?.(placeholder, markdown);
-            return;
-        }
-        const doc = view.state.doc.toString();
-        const at = doc.indexOf(placeholder);
-        if (at < 0) {
-            handlers.replaceDetachedUpload?.(placeholder, markdown);
-            return;
-        }
-        view.dispatch({
-            changes: { from: at, to: at + placeholder.length, insert: markdown },
-            userEvent: 'input.paste',
-        });
+        replace(markdown + separator);
     }));
 }
 export function uploadedFileMarkdown(result: {

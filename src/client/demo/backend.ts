@@ -424,6 +424,27 @@ export function createDemoBackend(): DemoBackend {
     state.cursor++
     return c.json(folder, 201)
   })
+  app.put('/api/folders/:id/note-order', async (c) => {
+    const folderId = c.req.param('id')
+    const { noteIds } = await jsonBody(c.req.raw)
+    if (!Array.isArray(noteIds) || !noteIds.length || !noteIds.every((id) => typeof id === 'string') || new Set(noteIds).size !== noteIds.length) {
+      return apiError(400, 'bad_request', 'noteIds must contain unique note IDs')
+    }
+    const notes = noteIds.map((id) => state.notes.get(id))
+    if (!state.folders.has(folderId) || !notes.every((note): note is Note =>
+      !!note && note.folderId === folderId && note.deletedAt === null && !note.isArchived)) {
+      return apiError(409, 'conflict', 'The notes no longer belong to this folder. Refresh and try again')
+    }
+    let changed = false
+    for (const [index, note] of notes.entries()) {
+      const position = index - notes.length
+      if (note.position === position) continue
+      state.notes.set(note.id, { ...note, position })
+      changed = true
+    }
+    if (changed) state.cursor++
+    return c.json({ ok: true as const })
+  })
   app.patch('/api/folders/:id', async (c) => {
     const current = state.folders.get(c.req.param('id'))
     if (!current) return apiError(404, 'not_found', 'Folder not found')
@@ -777,6 +798,10 @@ export function createDemoBackend(): DemoBackend {
     }
     const id = newDemoId()
     const url = await browserFileUrl(file)
+    if (c.req.raw.signal.aborted) {
+      revokeAttachment(url)
+      c.req.raw.signal.throwIfAborted()
+    }
     const meta = {
       id,
       noteId,

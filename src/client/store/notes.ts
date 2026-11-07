@@ -70,6 +70,7 @@ interface NotesState {
         icon?: string | null;
         color?: string | null;
     }) => boolean;
+    reorderFolderNotes: (folderId: string, noteIds: string[]) => Promise<void>;
     deleteFolder: (id: string) => boolean;
     trashFolder: (id: string) => Promise<boolean>;
     restoreFolderTrash: (id: string) => Promise<boolean>;
@@ -105,7 +106,7 @@ const openSequences: Record<WorkspacePane, number> = { primary: 0, secondary: 0 
 const latestRequestedNoteIds: Record<WorkspacePane, string | null> = { primary: null, secondary: null };
 
 const noteWriteTails = new Map<string, Promise<void>>();
-type OptimisticNotePatch = Partial<Pick<NoteSummary, 'folderId' | 'isPinned' | 'isStarred' | 'isArchived' | 'deletedAt' | 'updatedAt'>>;
+type OptimisticNotePatch = Partial<Pick<NoteSummary, 'folderId' | 'isPinned' | 'isStarred' | 'isArchived' | 'deletedAt' | 'updatedAt' | 'position'>>;
 interface PendingNoteMutation {
     patch: OptimisticNotePatch;
     before: NoteSummary;
@@ -1069,6 +1070,36 @@ export const useNotes = create<NotesState>((set, get) => ({
             toastError(err, normalized.name !== undefined ? t("sidebar.rename_failed") : t("sidebar.move_failed"));
         });
         return true;
+    },
+    async reorderFolderNotes(folderId, noteIds) {
+        await enqueueFolderWrite(folderId, async () => {
+            const current = get().notes;
+            if (noteIds.some((id) => current[id]?.folderId !== folderId))
+                return;
+            const mutations: Array<[string, PendingNoteMutation]> = [];
+            for (const [index, id] of noteIds.entries()) {
+                const position = index - noteIds.length;
+                if (current[id].position === position)
+                    continue;
+                const mutation = beginNoteMutation(id, { position }, set, get);
+                if (mutation)
+                    mutations.push([id, mutation]);
+            }
+            if (!mutations.length)
+                return;
+            try {
+                await api.folders.reorderNotes(folderId, noteIds);
+                for (const [id, mutation] of mutations)
+                    finishNoteMutation(id, mutation);
+            }
+            catch (error) {
+                for (const [id, mutation] of mutations) {
+                    finishNoteMutation(id, mutation);
+                    rollbackNoteMutation(id, mutation, set, get);
+                }
+                toastError(error, t("common.action_failed"));
+            }
+        });
     },
     deleteFolder(id) {
         const folder = get().folders.find((item) => item.id === id);
