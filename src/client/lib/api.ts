@@ -37,6 +37,7 @@ import type {
   TotpStatus,
   UpdateCheckResponse,
   UserSettings,
+  UploadSettings,
 } from '@shared/types'
 import { publishBroadcast } from './db'
 import { getLocale, t, translateApiError } from './i18n'
@@ -478,6 +479,8 @@ export const api = {
   },
 
   settings: {
+    uploads: () => request<UploadSettings>('/api/settings/uploads'),
+    saveUploads: (body: UploadSettings) => request<UploadSettings>('/api/settings/uploads', { method: 'PUT', body }),
     get: () => request<UserSettings>('/api/settings'),
     save: (body: Partial<UserSettings>) =>
       request<UserSettings>('/api/settings', { method: 'PUT', body }).then((settings) => {

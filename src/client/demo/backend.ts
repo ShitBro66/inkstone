@@ -51,6 +51,8 @@ interface DemoBackend {
 
 export function createDemoBackend(): DemoBackend {
   const state = createDemoState()
+  let uploadConcurrency = 1
+  let uploadSyncToAll = false
   const app = new Hono()
   const trashedFolders = new Map<string, Folder & { deletedAt: number }>()
   const folderTrash = new Map<string, FolderTrashGroup & { folderIds: string[] }>()
@@ -830,6 +832,17 @@ export function createDemoBackend(): DemoBackend {
     return c.json({ ok: true as const })
   })
 
+  app.get('/api/settings/uploads', (c) => c.json({ concurrency: uploadConcurrency, syncToAll: uploadSyncToAll }))
+  app.put('/api/settings/uploads', async (c) => {
+    if (state.user.role !== 'owner') return apiError(403, 'forbidden', 'Only the owner can change this setting')
+    const body = await jsonBody(c.req.raw)
+    if (!Number.isSafeInteger(body.concurrency) || Number(body.concurrency) < 1 || typeof body.syncToAll !== 'boolean') {
+      return apiError(400, 'bad_request', 'Invalid upload settings')
+    }
+    uploadConcurrency = Number(body.concurrency)
+    uploadSyncToAll = body.syncToAll
+    return c.json({ concurrency: uploadConcurrency, syncToAll: uploadSyncToAll })
+  })
   app.get('/api/settings', (c) => c.json(state.settings))
   app.put('/api/settings', async (c) => {
     state.settings = mergeSettingsPatch(state.settings, await jsonBody(c.req.raw))

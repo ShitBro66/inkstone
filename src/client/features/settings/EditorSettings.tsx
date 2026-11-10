@@ -1,12 +1,15 @@
 import { Segmented, SettingRow, Slider, Switch } from '../../components/form';
 import { useSession } from '../../store/session';
 import { t } from "../../lib/i18n";
+import { UploadSettingsPanel } from './UploadSettingsPanel';
 export function EditorSettings() {
     const settings = useSession((s) => s.settings);
     const update = useSession((s) => s.updateSettings);
+    const owner = useSession((s) => s.user?.role === 'owner');
     const editor = settings.editor;
     const preview = settings.preview;
     return (<div className="space-y-6">
+      {owner && <UploadSettingsPanel/>}
       <section>
         <SettingRow title={t("settings.editor_font")}>
           <Segmented<'mono' | 'sans'> label={t("settings.editor_font")} value={editor.fontFamily} onChange={(fontFamily) => void update({ editor: { fontFamily } })} options={[

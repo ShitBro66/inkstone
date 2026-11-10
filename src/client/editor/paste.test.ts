@@ -42,7 +42,7 @@ it.each([0, 1, 2])('pastes all clipboard images once when FileList contains %i o
     const { pending, uploadFile } = pendingUploads();
     editor({ uploadFile });
     paste([first, second].slice(0, listed), [first, second]);
-    expect(uploadFile.mock.calls.map(([file]) => file)).toEqual([first, second]);
+    await vi.waitFor(() => expect(uploadFile.mock.calls.map(([file]) => file)).toEqual([first, second]));
     pending.get(second)!.resolve(result(second));
     pending.get(first)!.resolve(result(first));
     await vi.waitFor(() => expect(view.state.doc.toString()).toBe('![first](</api/files/first.png>)\n![second](</api/files/second.png>)'));
@@ -52,6 +52,7 @@ it('removes a cancelled image immediately and still inserts the other image', as
     const { pending, uploadFile } = pendingUploads();
     editor({ uploadFile }, 'Existing text');
     const batch = insertFiles(view, [first, second], { uploadFile });
+    await vi.waitFor(() => expect(pending.size).toBe(2));
     const cancelled = pending.get(first)!;
     cancelled.cancel();
     expect(cancelled.signal.aborted).toBe(true);
@@ -68,6 +69,7 @@ it('removes the placeholder in the original note after its editor is detached', 
     const replaceDetachedUpload = vi.fn();
     editor({ uploadFile, replaceDetachedUpload });
     const batch = insertFiles(view, [first], { uploadFile, replaceDetachedUpload });
+    await vi.waitFor(() => expect(pending.size).toBe(1));
     const placeholder = view.state.doc.toString();
     view.dom.remove();
     pending.get(first)!.cancel();

@@ -5,7 +5,8 @@ import { t } from "../lib/i18n";
 
 
 export interface PasteHandlers {
-    uploadFile: (file: File, upload: { signal: AbortSignal; cancel: () => void }) => Promise<{
+    getUploadConcurrency?: () => Promise<number>;
+    uploadFile: (file: File, upload: { signal: AbortSignal; cancel: () => void; concurrency: number }) => Promise<{
         url: string;
         filename: string;
         isImage: boolean;
@@ -101,6 +102,7 @@ export async function insertFiles(view: EditorView, files: File[], handlers: Pas
         selection: EditorSelection.cursor(range.from + insert.length),
         userEvent: 'input.paste',
     });
+    const concurrency = handlers.getUploadConcurrency?.() ?? Promise.resolve(1);
     await Promise.all(pending.map(async ({ file, placeholder, separator }) => {
         const controller = new AbortController();
         const replace = (markdown: string) => {
@@ -124,7 +126,8 @@ export async function insertFiles(view: EditorView, files: File[], handlers: Pas
         };
         let result: Awaited<ReturnType<PasteHandlers['uploadFile']>> = null;
         try {
-            result = await handlers.uploadFile(file, { signal: controller.signal, cancel });
+            const limit = await concurrency;
+            result = await handlers.uploadFile(file, { signal: controller.signal, cancel, concurrency: limit });
         }
         catch {
         }

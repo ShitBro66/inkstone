@@ -8,6 +8,7 @@ import { setAllowRegistration } from '../lib/instance-settings'
 import { requireCurrentPassword } from '../lib/reauth'
 import { JSON_BODY_LIMITS, readJson } from '../lib/request'
 import { requireAuth } from '../middleware/auth'
+import { getUploadSettings, UPLOAD_SYNC_OWNER_KEY, uploadConcurrencyKey } from '../lib/upload-settings'
 
 export const settingsRoutes = new Hono<AppBindings>()
 
@@ -23,6 +24,30 @@ settingsRoutes.put('/registration', async (c) => {
   await setAllowRegistration(c.env.DB, body.enabled)
   await commitChange(c, 'site', user.id, 'upsert')
   return c.json({ ok: true, registrationOpen: body.enabled })
+})
+
+settingsRoutes.get('/uploads', async (c) => {
+  return c.json(await getUploadSettings(c.env.DB, c.get('userId')))
+})
+
+settingsRoutes.put('/uploads', async (c) => {
+  const user = c.get('user')
+  if (user.role !== 'owner') throw ApiError.forbidden('Only the owner can change this setting')
+  const body = await readJson<{ concurrency: number; syncToAll: boolean }>(c, JSON_BODY_LIMITS.small)
+  if (!Number.isSafeInteger(body.concurrency) || body.concurrency < 1 || typeof body.syncToAll !== 'boolean') {
+    throw ApiError.badRequest('concurrency must be a positive integer and syncToAll must be a boolean')
+  }
+  const db = c.env.DB
+  await db.batch([
+    db.prepare(`INSERT INTO app_meta (key, value) VALUES (?1, ?2)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+      .bind(uploadConcurrencyKey(user.id), String(body.concurrency)),
+    body.syncToAll
+      ? db.prepare(`INSERT INTO app_meta (key, value) VALUES (?1, ?2)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value`).bind(UPLOAD_SYNC_OWNER_KEY, user.id)
+      : db.prepare(`DELETE FROM app_meta WHERE key = ?1`).bind(UPLOAD_SYNC_OWNER_KEY),
+  ])
+  return c.json(await getUploadSettings(db, user.id))
 })
 
 settingsRoutes.get('/', (c) => {

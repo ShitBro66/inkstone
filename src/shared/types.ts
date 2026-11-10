@@ -137,6 +137,11 @@ export interface SyncSettings {
   pollIntervalMs: number
 }
 
+export interface UploadSettings {
+  concurrency: number
+  syncToAll: boolean
+}
+
 export interface UserSettings {
   appearance: AppearanceSettings
   editor: EditorSettings

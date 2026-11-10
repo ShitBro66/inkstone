@@ -3,7 +3,6 @@ import { truncateText } from '@shared/text-utils'
 import type { Env } from '../env'
 import { ApiError } from '../lib/errors'
 import { sha256Hex } from '../lib/encoding'
-import { acquireLease } from '../lib/lease'
 import {
   hasReasonableImageDimensions,
   readImageSize,
@@ -48,23 +47,13 @@ export async function persistAttachmentWithinQuota(
   env: Env,
   input: PersistAttachmentInput,
 ): Promise<PersistedAttachment> {
-  const release = await acquireLease(
-    env.DB,
-    `attachment-quota:${input.userId}`,
-    2 * 60 * 1000,
-    'Another attachment upload is being finalized. Try again shortly',
-  )
-  try {
-    const usage = await env.DB.prepare(
-      `SELECT COALESCE(SUM(size), 0) AS bytes FROM attachments WHERE user_id = ?1`,
-    ).bind(input.userId).first<{ bytes: number }>()
-    if ((usage?.bytes ?? 0) + input.bytes.byteLength > LIMITS.attachmentQuotaBytes) {
-      throw ApiError.tooLarge('The account attachment quota has been reached')
-    }
-    return await persistAttachment(env, input)
-  } finally {
-    await release()
+  const usage = await env.DB.prepare(
+    `SELECT COALESCE(SUM(size), 0) AS bytes FROM attachments WHERE user_id = ?1`,
+  ).bind(input.userId).first<{ bytes: number }>()
+  if ((usage?.bytes ?? 0) + input.bytes.byteLength > LIMITS.attachmentQuotaBytes) {
+    throw ApiError.tooLarge('The account attachment quota has been reached')
   }
+  return persistAttachment(env, input)
 }
 
 
@@ -113,9 +102,11 @@ export async function persistAttachment(
   storedObject = true
 
   try {
-    await env.DB.prepare(
+    // The quota check and row insertion must be atomic across concurrent uploads.
+    const inserted = await env.DB.prepare(
       `INSERT INTO attachments (id, user_id, note_id, filename, mime, size, sha256, width, height, storage, created_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)`,
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
+       WHERE (SELECT COALESCE(SUM(size), 0) FROM attachments WHERE user_id = ?2) + ?6 <= ?12`,
     )
       .bind(
         input.id,
@@ -129,8 +120,12 @@ export async function persistAttachment(
         dimensions?.height ?? null,
         storage,
         input.createdAt,
+        LIMITS.attachmentQuotaBytes,
       )
       .run()
+    if (!inserted.meta.changes) {
+      throw ApiError.tooLarge('The account attachment quota has been reached')
+    }
   } catch (error) {
     if (storedObject) {
       try {

@@ -17,6 +17,7 @@ import { EditorSkeleton, Empty } from '../../components/feedback';
 import { DeferredCodeEditor } from '../../editor/CodeEditor';
 import { insertFiles, type PasteHandlers } from '../../editor/paste';
 import { optimizeImageFile } from '../../lib/image';
+import { scheduleUpload } from '../../lib/upload-queue';
 import { exportNoteAsHtml, exportNoteAsMarkdown, exportNoteAsPdf } from '../../lib/export-note';
 import { Preview } from '../preview/Preview';
 import { Outline } from '../preview/Outline';
@@ -75,7 +76,7 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
     const exportMenuRef = useRef<HTMLButtonElement>(null);
     const [view, setView] = useState<EditorView | null>(null);
     const uploadSequence = useRef(0);
-    const [uploads, setUploads] = useState<Array<{ id: number; filename: string; percent: number | null; cancel: () => void }>>([]);
+    const [uploads, setUploads] = useState<Array<{ id: number; filename: string; percent: number | null; active: boolean; cancel: () => void }>>([]);
     const readingKey = userId && note ? readingPositionKey(userId, note.id) : null;
     const pendingReadingRef = useRef<{ key: string; position: ReturnType<typeof captureReadingPosition> } | null>(null);
     const readingTimerRef = useRef<number | undefined>(undefined);
@@ -198,27 +199,31 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
         tags: () => tags.map((t) => ({ name: t.name, count: t.count })),
     }), [notes, tags, note?.id]);
     const handlers = useMemo<PasteHandlers>(() => ({
-        uploadFile: async (file, { signal, cancel }) => {
+        getUploadConcurrency: async () => (await api.settings.uploads()).concurrency,
+        uploadFile: async (file, { signal, cancel, concurrency }) => {
             const id = ++uploadSequence.current;
             const removeUpload = () => setUploads((items) => items.filter((item) => item.id !== id));
-            setUploads((items) => [...items, { id, filename: file.name, percent: null, cancel: () => {
+            setUploads((items) => [...items, { id, filename: file.name, percent: null, active: false, cancel: () => {
                 cancel();
                 removeUpload();
             } }]);
             try {
-                const optimized = await optimizeImageFile(file);
-                signal.throwIfAborted();
-                const uploaded = await api.files.upload(optimized, note?.id, {
-                    signal,
-                    onUploadProgress: (percent) => setUploads((items) => items.map((item) =>
-                        item.id === id ? { ...item, percent } : item)),
+                return await scheduleUpload(userId!, concurrency, signal, async () => {
+                    setUploads((items) => items.map((item) => item.id === id ? { ...item, active: true } : item));
+                    const optimized = await optimizeImageFile(file);
+                    signal.throwIfAborted();
+                    const uploaded = await api.files.upload(optimized, note?.id, {
+                        signal,
+                        onUploadProgress: (percent) => setUploads((items) => items.map((item) =>
+                            item.id === id ? { ...item, percent } : item)),
+                    });
+                    signal.throwIfAborted();
+                    return {
+                        url: uploaded.url,
+                        filename: uploaded.filename,
+                        isImage: uploaded.mime.startsWith('image/'),
+                    };
                 });
-                signal.throwIfAborted();
-                return {
-                    url: uploaded.url,
-                    filename: uploaded.filename,
-                    isImage: uploaded.mime.startsWith('image/'),
-                };
             }
             catch (err) {
                 if (signal.aborted) return null;
@@ -244,7 +249,7 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
                 return;
             state.editContent(noteId, `${source.slice(0, at)}${replacement}${source.slice(at + placeholder.length)}`);
         },
-    }), [note?.id, toast]);
+    }), [note?.id, userId, toast]);
     const onChange = useCallback((next: string) => {
         if (!note)
             return;
@@ -517,7 +522,7 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
         {uploads.map((upload) => (<div key={upload.id} className="flex max-w-lg items-center gap-2 py-1">
           <div className="min-w-0 flex-1">
             <div className="truncate text-[12px] text-[var(--text-secondary)]" title={upload.filename}>
-              {t("workspace.uploading_file", { filename: upload.filename })}
+              {t(upload.active ? "workspace.uploading_file" : "workspace.upload_queued_file", { filename: upload.filename })}
             </div>
             <progress aria-label={t("workspace.uploading_file", { filename: upload.filename })} max={100} value={upload.percent ?? undefined} className="mt-1 block h-1 w-full appearance-none overflow-hidden rounded-full bg-[var(--accent-soft)] [&::-webkit-progress-bar]:bg-[var(--accent-soft)] [&::-webkit-progress-value]:rounded-full [&::-webkit-progress-value]:bg-[var(--accent)] [&::-moz-progress-bar]:rounded-full [&::-moz-progress-bar]:bg-[var(--accent)] indeterminate:motion-safe:animate-pulse"/>
           </div>
